@@ -13,7 +13,12 @@ ESP32-S3 USB-Serial-JTAG port resets the chip.
 import argparse, base64, glob, json, logging, os, queue, subprocess, tempfile, threading, time, uuid, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import asyncio
 import serial
+try:
+    from bleak import BleakClient, BleakScanner
+except ImportError:          # BLE optional
+    BleakClient = BleakScanner = None
 
 log = logging.getLogger("buddy")
 
@@ -35,6 +40,72 @@ SESSION_STALE_S = 30 * 60   # forget sessions with no event for this long
 KEEPALIVE_S = 10            # REFERENCE.md: device treats >30s silence as dead
 
 
+NUS_SVC = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"   # we write
+NUS_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"   # stick notifies
+
+
+class BleLink:
+    """Nordic UART over BLE, driven by a private asyncio loop thread.
+    Exposes write()/close() like a pyserial port so the Bridge can treat both
+    transports the same. First connect triggers macOS pairing (passkey shown
+    on the stick); later connects reuse the bond."""
+    kind = "ble"
+
+    def __init__(self, on_line):
+        self.on_line = on_line
+        self.loop = asyncio.new_event_loop()
+        threading.Thread(target=self.loop.run_forever, daemon=True).start()
+        self.client = None
+        self.buf = b""
+        self.name = None
+
+    def _run(self, coro, timeout):
+        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout)
+
+    def _notify(self, _h, data):
+        self.buf += bytes(data)
+        while b"\n" in self.buf:
+            line, self.buf = self.buf.split(b"\n", 1)
+            self.on_line(line.strip())
+
+    async def _connect(self, prefix):
+        dev = await BleakScanner.find_device_by_filter(
+            lambda d, adv: (d.name or "").startswith(prefix)
+            or NUS_SVC in [u.lower() for u in adv.service_uuids], timeout=6)
+        if not dev:
+            return False
+        c = BleakClient(dev, disconnected_callback=lambda _c: None)
+        await c.connect(timeout=15)
+        await c.start_notify(NUS_TX, self._notify)   # encrypted CCCD -> pairing
+        self.client, self.name = c, dev.name
+        return True
+
+    def connect(self, prefix="Claude"):
+        return self._run(self._connect(prefix), 120)   # pairing dialog may take a while
+
+    @property
+    def connected(self):
+        return bool(self.client and self.client.is_connected)
+
+    def write(self, data):
+        if not self.connected:
+            raise IOError("ble disconnected")
+        n = 180   # macOS negotiates MTU 185
+        for i in range(0, len(data), n):
+            # no per-packet response: line-level acks + the stick's 8 KB ring
+            # buffer provide flow control (bridge keeps <=2 audio lines in flight)
+            self._run(self.client.write_gatt_char(NUS_RX, data[i:i + n], response=False), 10)
+
+    def close(self):
+        if self.client:
+            try:
+                self._run(self.client.disconnect(), 10)
+            except Exception:
+                pass
+        self.client = None
+
+
 class Prompt:
     def __init__(self, pid, session, tool, hint):
         self.id, self.session, self.tool, self.hint = pid, session, tool, hint
@@ -44,8 +115,9 @@ class Prompt:
 
 
 class Bridge:
-    def __init__(self, port_glob, owner, tz_offset):
+    def __init__(self, port_glob, owner, tz_offset, ble_prefix="Claude"):
         self.port_glob, self.owner, self.tz = port_glob, owner, tz_offset
+        self.ble_prefix = ble_prefix     # "" disables BLE
         self.lock = threading.Lock()
         self.ser = None
         self.ser_lock = threading.Lock()  # serialises write/close of the port
@@ -137,16 +209,53 @@ class Bridge:
             for p in self.prompts:   # stick gone: fall back to terminal now
                 p.event.set()
 
+    def _ble_open(self):
+        if not (self.ble_prefix and BleakClient):
+            return False
+        link = BleLink(self._on_device_line)
+        try:
+            if not link.connect(self.ble_prefix):
+                return False
+            probe, want = (({"cmd": "owner", "name": self.owner}, "owner") if self.owner
+                           else ({"cmd": "sfx", "name": "none"}, "sfx"))
+            with self.ack_cv:
+                base = self.acks.get(want, (0, None))[0]
+            for _ in range(5):
+                link.write((json.dumps(probe) + "\n").encode())
+                if self._wait_ack(want, base + 1, 2.0):
+                    break
+            else:
+                raise IOError("no handshake ack over BLE")
+        except Exception as e:
+            log.warning("ble connect failed: %s", e)
+            link.close()
+            return False
+        with self.ser_lock:
+            self.ser = link
+        log.info("stick ready over BLE (%s)", link.name)
+        self._write({"time": [int(time.time()), self.tz]})
+        self.dirty.set()
+        return True
+
     def serial_loop(self):
         buf = b""
         while True:
             if not self.ser:
                 try:
-                    if not self._open():
-                        time.sleep(2); continue
+                    if not self._open() and not self._ble_open():
+                        time.sleep(3); continue
                 except Exception as e:
                     log.warning("open failed: %s", e); time.sleep(2); continue
             s = self.ser
+            if isinstance(s, BleLink):
+                # notifications arrive on the BLE thread; here we only watch
+                # for link loss, or a USB cable to switch back to.
+                time.sleep(1)
+                if not s.connected:
+                    log.info("BLE link lost"); self._drop(s)
+                elif glob.glob(self.port_glob):
+                    log.info("USB attached; switching from BLE"); self._drop(s)
+                continue
             try:
                 chunk = s.read(256)
             except Exception as e:
@@ -269,12 +378,12 @@ class Bridge:
                 self.ack_cv.wait(left)
             return self.acks[name][1]
 
-    def _send_audio(self, pcm):
+    def _send_audio(self, pcm, rate=AUDIO_RATE):
         def acked(name):
             with self.ack_cv:
                 return self.acks.get(name, (0, None))[0]
         base = acked("audio_begin")
-        self._write({"cmd": "audio_begin", "rate": AUDIO_RATE, "len": len(pcm)})
+        self._write({"cmd": "audio_begin", "rate": rate, "len": len(pcm)})
         a = self._wait_ack("audio_begin", base + 1)
         if not a or not a.get("ok"):
             log.info("audio_begin refused (%s)", a)   # muted on device, or no RAM
@@ -282,8 +391,9 @@ class Bridge:
         chunks = [pcm[i:i + CHUNK_RAW] for i in range(0, len(pcm), CHUNK_RAW)]
         base = acked("audio")
         for i, c in enumerate(chunks):
-            if i >= CHUNK_WINDOW:
-                a = self._wait_ack("audio", base + i - CHUNK_WINDOW + 1)
+            win = 2 if isinstance(self.ser, BleLink) else CHUNK_WINDOW
+            if i >= win:
+                a = self._wait_ack("audio", base + i - win + 1, 6.0)
                 if a is None or not a.get("ok"):
                     log.warning("audio chunk %d/%d failed: %s", i, len(chunks), a); return False
             self._write({"cmd": "audio", "d": base64.b64encode(c).decode()})
@@ -309,11 +419,12 @@ class Bridge:
                     time.sleep(0.4)
                 else:
                     t0 = time.time()
-                    pcm = tts_pcm(arg)
-                    if self._send_audio(pcm):
-                        log.info("said %r (%.1fs audio, %.1fs total)", arg,
-                                 len(pcm) / 2 / AUDIO_RATE, time.time() - t0)
-                        time.sleep(len(pcm) / 2 / AUDIO_RATE)   # don't overlap clips
+                    rate = 8000 if isinstance(self.ser, BleLink) else AUDIO_RATE
+                    pcm = tts_pcm(arg, rate)
+                    if self._send_audio(pcm, rate):
+                        log.info("said %r via %s (%.1fs audio, %.1fs total)", arg,
+                                 getattr(self.ser, "kind", "usb"), len(pcm) / 2 / rate, time.time() - t0)
+                        time.sleep(len(pcm) / 2 / rate)   # don't overlap clips
             except Exception as e:
                 log.warning("audio %s failed: %s", kind, e)
 
@@ -400,15 +511,15 @@ def limits_for(rl, now):
     return out
 
 
-def tts_pcm(text):
-    """macOS `say` -> raw int16 LE mono PCM at AUDIO_RATE."""
+def tts_pcm(text, rate=AUDIO_RATE):
+    """macOS `say` -> raw int16 LE mono PCM at `rate`."""
     fd, path = tempfile.mkstemp(suffix=".wav"); os.close(fd)
     try:
         subprocess.run(["/usr/bin/say", "-v", VOICE, "-o", path,
-                        "--file-format=WAVE", f"--data-format=LEI16@{AUDIO_RATE}", text],
+                        "--file-format=WAVE", f"--data-format=LEI16@{rate}", text],
                        check=True, timeout=20, capture_output=True)
         with wave.open(path, "rb") as w:
-            return w.readframes(min(w.getnframes(), AUDIO_RATE * AUDIO_MAX_S))
+            return w.readframes(min(w.getnframes(), rate * AUDIO_MAX_S))
     finally:
         os.unlink(path)
 
@@ -466,7 +577,9 @@ def make_handler(bridge, perm_timeout):
             self._reply({})
 
         def do_GET(self):  # health / debug
-            self._reply({"serial": bool(bridge.ser), "rate_limits": bridge.rate, **bridge.snapshot()})
+            link = bridge.ser
+            self._reply({"serial": bool(link), "link": getattr(link, "kind", "usb") if link else None,
+                         "rate_limits": bridge.rate, **bridge.snapshot()})
     return H
 
 
@@ -476,13 +589,14 @@ def main():
     ap.add_argument("--listen", default="127.0.0.1:47830")
     ap.add_argument("--owner", default="")
     ap.add_argument("--perm-timeout", type=float, default=25.0)
+    ap.add_argument("--ble-prefix", default="Claude", help='BLE name prefix; "" disables BLE')
     ap.add_argument("--no-voice", action="store_true", help="no sfx / speech")
     ap.add_argument("-v", action="store_true")
     a = ap.parse_args()
     logging.basicConfig(level=logging.DEBUG if a.v else logging.INFO,
                         format="%(asctime)s %(message)s")
     tz = -time.altzone if time.localtime().tm_isdst else -time.timezone
-    b = Bridge(a.port, a.owner, tz)
+    b = Bridge(a.port, a.owner, tz, a.ble_prefix)
     threading.Thread(target=b.serial_loop, daemon=True).start()
     threading.Thread(target=b.heartbeat_loop, daemon=True).start()
     b.voice = not a.no_voice

@@ -1,5 +1,9 @@
 # Changelog (fork wangngo/claude-desktop-buddy)
 
+## 2026-11-18 (3) — BLE transport
+- bridge: `BleLink` (bleak, NUS, bonded passkey pairing). Fallback when there is no USB, switches back when the cable returns. Write-without-response + line acks; speech at 8 kHz over BLE: 3.3 s clip in 5.7 s (was 37 s with per-packet responses). Verified: pairing, reconnect via bond after a daemon restart, speech, permission allow by button over BLE.
+- firmware: BLE RX ring 2 KB → 8 KB (flash pending, needs USB).
+
 ## 2026-11-18 (2) — speaker: voice + sfx
 - firmware `src/audio.h`: `sfx` tone patterns and `audio_begin/audio/audio_end` PCM playback (PSRAM buffer); PSRAM enabled (qio_opi, 8MB detected).
 - bridge: macOS `say -v Linh` speech for permission prompts / long turns / limit thresholds; windowed acked audio transfer; boot handshake replaces the fixed 4s sleep.

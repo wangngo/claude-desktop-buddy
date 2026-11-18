@@ -10,7 +10,8 @@
 
 - [ ] IR Daikin (deferred by W): RX unusable (EXT_5V boost noise ~8.7kHz on G42, see CHANGELOG). Next: W reads remote model (ARC…) → pick IRremoteESP8266 Daikin variant, or trial-send variants and listen for the AC beep. FAQ fix to try: full battery / load on Grove.
 - [ ] Mic: push-to-talk voice approve ("được"/"không") — option 2 from the mic/speaker menu (not started).
-- [ ] BLE transport in daemon (bleak) and WiFi (LAN transport + OTA + device HTTP API for AC) — agreed order IR→BT→WiFi, IR deferred.
+- [ ] Flash firmware with BLE RX 8 KB (src/ble_bridge.cpp) — needs USB.
+- [ ] WiFi (LAN transport + OTA + device HTTP API for AC) — agreed order IR→BT→WiFi, IR deferred.
 
 ## Done
 - [x] Speaker voice (macOS say Linh) + sfx, PSRAM on (2026-11-18).

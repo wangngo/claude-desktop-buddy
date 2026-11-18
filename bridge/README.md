@@ -19,6 +19,16 @@ statusline ──statusline-tee.sh──┘   (rate_limits → "lim" field)
 | `statusline-tee.sh` | statusline wrapper: forwards the statusline JSON (has `rate_limits`) to `/statusline`, then runs `ccstatusline` unchanged |
 | `com.wangngo.claude-buddy-bridge.plist` | LaunchAgent, `KeepAlive`, log `~/Library/Logs/claude-buddy-bridge.log` |
 
+## Transports
+
+USB is used first. Without a cable, the daemon scans BLE for a `Claude*`
+device advertising Nordic UART. On the first connect, macOS asks for the
+**6-digit passkey shown on the stick**; later connects reuse the bond.
+Plugging USB back in switches over to it. Over BLE, speech goes at 8 kHz with ≤2
+audio lines in flight (~2× realtime). BLE takes the stick's single BLE
+slot, so Claude Desktop's Hardware Buddy can't connect at the same time
+(disable with `--ble-prefix ""`).
+
 ## Behaviour
 
 - **Permission prompt, stick attached**: the stick shows it and waits up to

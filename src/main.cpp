@@ -117,6 +117,8 @@ static void sendCmd(const char* json) {
   size_t n = strlen(json);
   bleWrite((const uint8_t*)json, n);
   bleWrite((const uint8_t*)"\n", 1);
+  wifiWrite((const uint8_t*)json, n);
+  wifiWrite((const uint8_t*)"\n", 1);
 }
 const uint8_t INFO_PAGES = 6;
 const uint8_t INFO_PG_BUTTONS = 1;
@@ -957,6 +959,8 @@ void drawHUD() {
   }
 }
 
+#include "dash.h"
+
 void setup() {
   Serial.setRxBufferSize(16384);   // audio chunks arrive in windows over USB
   auto cfg = M5.config();
@@ -972,11 +976,13 @@ void setup() {
   lastInteractMs = millis();
   statsLoad();
   settingsLoad();
+  wifiInit();
   petNameLoad();
   buddyInit();
 
   // BLE stays always-on; s.bt is stored as a preference only.
   spr.createSprite(W, H);
+  dashInit();
   characterInit(nullptr);  // scan /characters/ for whatever is installed
   gifAvailable = characterLoaded();
   // species NVS: 0..N-1 = ASCII species, 0xFF = use GIF (also the default,
@@ -1015,6 +1021,7 @@ void loop() {
   M5.update();
   HBeep.update();
   audioTick();
+  wifiTick();
   t++;
   uint32_t now = millis();
 
@@ -1177,7 +1184,7 @@ void loop() {
   bool clocking = displayMode == DISP_NORMAL
                && !menuOpen && !settingsOpen && !resetOpen && !inPrompt
                && tama.sessionsRunning == 0 && tama.sessionsWaiting == 0
-               && dataRtcValid() && _onUsb;
+               && dataRtcValid() && _onUsb && !dashReady;   // dashboard replaces the clock
   if (clocking) clockUpdateOrient();
   else { clockOrient = 0; orientFrames = 0; paintedOrient = 0; }
   bool landscapeClock = clocking && clockOrient != 0;
@@ -1212,6 +1219,12 @@ void loop() {
   if (pk && !lastPasskey) { wake(); beep(1800, 60); }
   lastPasskey = pk;
 
+  bool dashOn = displayMode == DISP_NORMAL && !menuOpen && !settingsOpen && !resetOpen
+             && !blePasskey() && !napping && !screenOff;
+  if (dashOn && dashTick()) {
+    // landscape dashboard drew the whole screen
+  } else {
+  if (!dashOn) dashLeave();
   if (napping || screenOff || landscapeClock) {
     // skip sprite render — face-down, powered off, or landscape clock
     // (which draws direct-to-LCD below)
@@ -1255,6 +1268,7 @@ void loop() {
     else if (menuOpen) drawMenu();
     spr.pushSprite(0, 0);
   }
+  }   // !dashOn
 
   // Face-down nap: dim immediately, pause animations, accumulate sleep time.
   // Skipped during approval — you're holding it to read, not sleeping it.

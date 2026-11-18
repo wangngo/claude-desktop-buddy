@@ -4,6 +4,7 @@
 #include "ble_bridge.h"
 #include <mbedtls/base64.h>
 #include <ArduinoJson.h>
+#include "wifi_link.h"
 
 static File     _xFile;
 static uint32_t _xExpected = 0, _xWritten = 0;
@@ -19,6 +20,7 @@ static void _xAck(const char* what, bool ok, uint32_t n = 0) {
   int len = snprintf(b, sizeof(b), "{\"ack\":\"%s\",\"ok\":%s,\"n\":%lu}\n", what, ok?"true":"false", (unsigned long)n);
   Serial.write(b, len);
   bleWrite((const uint8_t*)b, len);
+  wifiWrite((const uint8_t*)b, len);
 }
 
 static uint32_t _xWipeDir(const char* dir) {
@@ -79,6 +81,7 @@ inline bool xferCommand(JsonDocument& doc) {
   const char* cmd = doc["cmd"];
   if (!cmd) return false;
   if (audioCommand(doc)) return true;
+  if (wifiCommand(doc)) return true;
 
   if (strcmp(cmd, "name") == 0) {
     const char* n = doc["name"];
@@ -239,3 +242,5 @@ inline bool xferCommand(JsonDocument& doc) {
 inline bool xferActive() { return _xActive; }
 inline uint32_t xferProgress() { return _xTotalWritten; }
 inline uint32_t xferTotal() { return _xTotal; }
+
+#include "wifi_impl.h"   // after _xAck users; shares settings() with this TU

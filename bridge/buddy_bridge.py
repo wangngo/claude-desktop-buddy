@@ -10,7 +10,7 @@ terminal prompt by returning an empty decision.
 The serial port is opened once and kept open: on macOS every open of the
 ESP32-S3 USB-Serial-JTAG port resets the chip.
 """
-import argparse, base64, glob, json, logging, os, queue, subprocess, tempfile, threading, time, uuid, wave
+import argparse, base64, glob, hashlib, hmac, json, secrets, socket, logging, os, queue, subprocess, tempfile, threading, time, uuid, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import asyncio
@@ -106,6 +106,90 @@ class BleLink:
         self.client = None
 
 
+CONF_DIR = os.path.expanduser("~/.config/claude-buddy")
+WIFI_PORT = 47831
+
+
+def conf_load():
+    try:
+        with open(os.path.join(CONF_DIR, "state.json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def conf_save(d):
+    os.makedirs(CONF_DIR, mode=0o700, exist_ok=True)
+    p = os.path.join(CONF_DIR, "state.json")
+    fd = os.open(p + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(d, f)
+    os.replace(p + ".tmp", p)
+
+
+class WifiLink:
+    """TCP to the stick's WiFi server with HMAC challenge-response auth."""
+    kind = "wifi"
+
+    def __init__(self, on_line):
+        self.on_line = on_line
+        self.sock = None
+        self.name = None
+
+    def connect(self, hosts, key_hex):
+        key = bytes.fromhex(key_hex)
+        for h in hosts:
+            if not h:
+                continue
+            try:
+                sk = socket.create_connection((h, WIFI_PORT), timeout=3)
+            except OSError:
+                continue
+            sk.settimeout(5)
+            f = sk.makefile("rb")
+            try:
+                hello = json.loads(f.readline())
+                mac = hmac.new(key, hello["nonce"].encode(), hashlib.sha256).hexdigest()
+                sk.sendall((json.dumps({"cmd": "auth", "mac": mac}) + "\n").encode())
+                ack = json.loads(f.readline())
+                if not ack.get("ok"):
+                    raise IOError("auth rejected")
+            except Exception as e:
+                log.warning("wifi auth with %s failed: %s", h, e)
+                sk.close()
+                continue
+            sk.settimeout(None)
+            self.sock, self.name = sk, h
+            threading.Thread(target=self._reader, args=(f,), daemon=True).start()
+            return True
+        return False
+
+    def _reader(self, f):
+        try:
+            for line in f:
+                self.on_line(line.strip())
+        except Exception:
+            pass
+        self.sock = None
+
+    @property
+    def connected(self):
+        return self.sock is not None
+
+    def write(self, data):
+        if not self.sock:
+            raise IOError("wifi disconnected")
+        self.sock.sendall(data)
+
+    def close(self):
+        if self.sock:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+        self.sock = None
+
+
 class Prompt:
     def __init__(self, pid, session, tool, hint):
         self.id, self.session, self.tool, self.hint = pid, session, tool, hint
@@ -125,7 +209,9 @@ class Bridge:
         self.entries = []         # newest first
         self.msg = "Claude Code idle"
         self.prompts = []         # FIFO of pending Prompt
-        self.rate = {}            # statusline rate_limits, latest seen
+        self.rate = {}            # rate_limits shown on the stick
+        self.rate_by_sess = {}    # session_id -> (rate_limits, time seen)
+        self.last_active = {}     # session_id -> time of last hook activity
         self.voice = True
         self.audio_q = queue.Queue()
         self.ack_cv = threading.Condition()
@@ -209,6 +295,49 @@ class Bridge:
             for p in self.prompts:   # stick gone: fall back to terminal now
                 p.event.set()
 
+    def _wifi_open(self):
+        c = conf_load()
+        if not c.get("key") or not (c.get("host") or c.get("ip")):
+            return False
+        link = WifiLink(self._on_device_line)
+        hosts = [c.get("host") and c["host"] + ".local", c.get("ip")]
+        if not link.connect(hosts, c["key"]):
+            return False
+        with self.ser_lock:
+            self.ser = link
+        log.info("stick ready over WiFi (%s)", link.name)
+        self._write({"time": [int(time.time()), self.tz]})
+        if self.owner:
+            self._write({"cmd": "owner", "name": self.owner})
+        self.dirty.set()
+        return True
+
+    def wifi_provision(self, ssid, psk):
+        """Send WiFi creds + auth key to the stick over the current link."""
+        if not self.ser:
+            return {"ok": False, "error": "stick not connected"}
+        c = conf_load()
+        c.setdefault("key", secrets.token_hex(32))
+        conf_save(c)
+        with self.ack_cv:
+            base = self.acks.get("wifi_set", (0, None))[0]
+        self._write({"cmd": "wifi_set", "ssid": ssid, "psk": psk, "key": c["key"]})
+        a = self._wait_ack("wifi_set", base + 1, 5)
+        if not a or not a.get("ok"):
+            return {"ok": False, "error": f"stick refused: {a}"}
+        # wait for the stick to join and report its address
+        for _ in range(20):
+            time.sleep(1)
+            with self.ack_cv:
+                base = self.acks.get("wifi_status", (0, None))[0]
+            self._write({"cmd": "wifi_status"})
+            st = self._wait_ack("wifi_status", base + 1, 3) or {}
+            if st.get("ip"):
+                c.update(host=st.get("host"), ip=st.get("ip"))
+                conf_save(c)
+                return {"ok": True, "host": st.get("host"), "ip": st["ip"], "rssi": st.get("rssi")}
+        return {"ok": False, "error": "stick did not join WiFi in 20s", "last": st}
+
     def _ble_open(self):
         if not (self.ble_prefix and BleakClient):
             return False
@@ -242,19 +371,25 @@ class Bridge:
         while True:
             if not self.ser:
                 try:
-                    if not self._open() and not self._ble_open():
+                    if not self._open() and not self._wifi_open() and not self._ble_open():
                         time.sleep(3); continue
                 except Exception as e:
                     log.warning("open failed: %s", e); time.sleep(2); continue
             s = self.ser
-            if isinstance(s, BleLink):
-                # notifications arrive on the BLE thread; here we only watch
-                # for link loss, or a USB cable to switch back to.
+            if isinstance(s, (BleLink, WifiLink)):
+                # reads happen on the link's own thread; here we only watch
+                # for link loss, or a better link (USB > WiFi > BLE).
                 time.sleep(1)
                 if not s.connected:
-                    log.info("BLE link lost"); self._drop(s)
+                    log.info("%s link lost", s.kind); self._drop(s)
                 elif glob.glob(self.port_glob):
-                    log.info("USB attached; switching from BLE"); self._drop(s)
+                    log.info("USB attached; switching from %s", s.kind); self._drop(s)
+                elif isinstance(s, BleLink) and int(time.time()) % 30 == 0 and conf_load().get("key"):
+                    probe = WifiLink(lambda l: None)
+                    c = conf_load()
+                    if probe.connect([c.get("host") and c["host"] + ".local", c.get("ip")], c["key"]):
+                        probe.close()
+                        log.info("WiFi reachable; switching from BLE"); self._drop(s)
                 continue
             try:
                 chunk = s.read(256)
@@ -321,6 +456,7 @@ class Bridge:
     def _touch(self, sid, **kw):
         s = self.sessions.setdefault(sid, {"running": False, "seen": 0})
         s["seen"] = time.time()
+        self.last_active[sid] = s["seen"]
         s.update(kw)
 
     def _entry(self, text):
@@ -391,7 +527,7 @@ class Bridge:
         chunks = [pcm[i:i + CHUNK_RAW] for i in range(0, len(pcm), CHUNK_RAW)]
         base = acked("audio")
         for i, c in enumerate(chunks):
-            win = 2 if isinstance(self.ser, BleLink) else CHUNK_WINDOW
+            win = 2 if isinstance(self.ser, BleLink) else CHUNK_WINDOW   # USB/WiFi: 8
             if i >= win:
                 a = self._wait_ack("audio", base + i - win + 1, 6.0)
                 if a is None or not a.get("ok"):
@@ -431,7 +567,18 @@ class Bridge:
     def on_statusline(self, st):
         rl = st.get("rate_limits")
         if isinstance(rl, dict):
+            sid = st.get("session_id", "?")
             with self.lock:
+                now = time.time()
+                self.rate_by_sess[sid] = (rl, now)
+                for k in [k for k, (_, t) in self.rate_by_sess.items() if now - t > 600]:
+                    del self.rate_by_sess[k]
+                # Several sessions may belong to different accounts, each with
+                # its own limits. Show the session that was active most recently
+                # (hook activity), not whichever statusline refreshed last.
+                best = max(self.rate_by_sess,
+                           key=lambda k: (self.last_active.get(k, 0), self.rate_by_sess[k][1]))
+                rl = self.rate_by_sess[best][0]
                 changed = rl != self.rate
                 self.rate = rl
             if changed:
@@ -554,6 +701,8 @@ def make_handler(bridge, perm_timeout):
                 ev = json.loads(self.rfile.read(n) or b"{}")
             except Exception:
                 return self._reply({})
+            if self.path.startswith("/wifi_set"):
+                return self._reply(bridge.wifi_provision(str(ev.get("ssid", "")), str(ev.get("psk", ""))))
             if self.path.startswith("/say"):
                 if ev.get("sfx"): bridge.sfx(ev["sfx"])
                 if ev.get("text"): bridge.say(str(ev["text"])[:200])
@@ -579,6 +728,8 @@ def make_handler(bridge, perm_timeout):
         def do_GET(self):  # health / debug
             link = bridge.ser
             self._reply({"serial": bool(link), "link": getattr(link, "kind", "usb") if link else None,
+                         "rate_by_session": {k[:8]: {w: v.get(w, {}).get("used_percentage") for w in ("five_hour", "seven_day")}
+                                             for k, (v, _) in bridge.rate_by_sess.items()},
                          "rate_limits": bridge.rate, **bridge.snapshot()})
     return H
 

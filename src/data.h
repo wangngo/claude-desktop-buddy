@@ -34,6 +34,7 @@ struct TamaState {
 // ---------------------------------------------------------------------------
 
 static uint32_t _lastLiveMs = 0;
+static uint32_t _lastWifiMs = 0;      // last authenticated WiFi line
 static uint32_t _lastBtByteMs = 0;   // hasClient() lies; track actual BT traffic
 static bool     _demoMode   = false;
 static uint8_t  _demoIdx    = 0;
@@ -63,7 +64,10 @@ inline bool dataBtActive() {
 
 inline const char* dataScenarioName() {
   if (_demoMode) return _FAKES[_demoIdx].n;
-  if (dataConnected()) return dataBtActive() ? "bt" : "usb";
+  if (dataConnected()) {
+    if (_lastWifiMs && millis() - _lastWifiMs <= 15000) return "wifi";
+    return dataBtActive() ? "bt" : "usb";
+  }
   return "none";
 }
 
@@ -184,6 +188,13 @@ inline void dataPoll(TamaState* out) {
       }
     } else if (_btLine.len < sizeof(_btLine.buf) - 1) {
       _btLine.buf[_btLine.len++] = (char)c;
+    }
+  }
+
+  { static char wl[1024];
+    while (wifiPollLine(wl, sizeof(wl))) {
+      _lastBtByteMs = 0; _lastWifiMs = millis();
+      if (wl[0] == '{') _applyJson(wl, out);
     }
   }
 

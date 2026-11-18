@@ -31,6 +31,18 @@ statusline ──statusline-tee.sh──┘   (rate_limits → "lim" field)
   in the HUD line above the transcript and on Info page "CLAUDE" → LIMITS.
   The `lim` field is a bridge extension that stock firmware ignores.
 
+- **Voice and sounds**: the stick's speaker plays short tones (`sfx`: done /
+  warn / error / prompt) and Vietnamese speech made offline by the macOS
+  voice `say -v Linh`. The PCM goes over USB in acked base64 chunks into
+  PSRAM. Events:
+  - a permission prompt says "Claude xin …";
+  - the end of a turn plays the done chime, plus "Xong rồi" if the turn ran ≥20 s;
+  - the 5h/7d limit crossing 80/90/95% plays a warn tone and speech, once per window.
+
+  Muted when the stick's *sound* setting is off; turn it off on the daemon with
+  `--no-voice`. Test: `curl -XPOST localhost:47830/say -d '{"text":"xin chào"}'`
+  or `-d '{"sfx":"done"}'`.
+
 Health/debug: `curl -s http://127.0.0.1:47830/ | python3 -m json.tool`
 
 ## Install (macOS)
@@ -64,6 +76,10 @@ Then remove the hook entries whose url is `http://127.0.0.1:47830/` from
 - Opening `/dev/cu.usbmodem*` on macOS resets the StickS3. Never open it from
   a per-event script; only the daemon holds it. Stop the LaunchAgent before
   `pio run -t upload`/`uploadfs` (the port is busy), then start it again with
-  `launchctl kickstart gui/$(id -u)/com.wangngo.claude-buddy-bridge`.
+  `launchctl kickstart gui/$(id -u)/com.wangngo.claude-buddy-bridge`. Wait ~2 s after
+  `bootout`: the old process needs a moment to release the port, otherwise upload fails.
+- The daemon handshakes after open (waits for the `buddy:` boot line, then
+  polls `owner` until it is acked). A fixed sleep lost the first command
+  once PSRAM init made boot slower.
 - StickS3 side button is the M5PM1 power key. Single click resets, double
   click powers off, and holding ~2 s (green LED blinks) enters download mode.

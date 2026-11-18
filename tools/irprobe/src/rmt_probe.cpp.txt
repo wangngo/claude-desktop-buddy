@@ -1,0 +1,88 @@
+// Probe v2: IR receive on StickS3 via RMT (vendor: GPIO receive unsupported).
+// Prints each burst as pulse-distance-decoded bytes (LSB first) so we can
+// identify the Daikin variant by section lengths.
+#include <M5Unified.h>
+#include <driver/rmt.h>
+
+static const gpio_num_t RX_PIN = GPIO_NUM_42;
+static const rmt_channel_t RX_CH = RMT_CHANNEL_4;   // S3: RX channels are 4..7
+static RingbufHandle_t rb = nullptr;
+static uint32_t noiseFrames = 0, lastReport = 0;
+
+static void show(const String& a, const String& b) {
+  M5.Display.fillScreen(TFT_BLACK);
+  M5.Display.setCursor(0, 0);
+  M5.Display.setTextSize(2); M5.Display.println(a);
+  M5.Display.setTextSize(1); M5.Display.println(b);
+}
+
+void setup() {
+  auto cfg = M5.config(); cfg.serial_baudrate = 115200;
+  M5.begin(cfg);
+  M5.Power.setExtOutput(true);   // IR TX/RX power
+  M5.Speaker.end();
+  M5.Display.setRotation(0);
+
+  rmt_config_t c = RMT_DEFAULT_CONFIG_RX(RX_PIN, RX_CH);
+  c.clk_div = 80;                              // 1 tick = 1 us
+  c.mem_block_num = 4;
+  c.rx_config.filter_en = true;
+  c.rx_config.filter_ticks_thresh = 255;       // drop glitches < ~3 us (APB ticks)
+  c.rx_config.idle_threshold = 12000;          // 12 ms silence ends a burst
+  ESP_ERROR_CHECK(rmt_config(&c));
+  ESP_ERROR_CHECK(rmt_driver_install(RX_CH, 8192, 0));
+  rmt_get_ringbuf_handle(RX_CH, &rb);
+  rmt_rx_start(RX_CH, true);
+  show("IR probe 2", "RMT rx on G42\npress remote");
+  Serial.println("[irprobe2] ready");
+}
+
+// Pulse-distance decode: mark ~430us, space ~430 (0) / ~1300 (1).
+static void decodeBurst(rmt_item32_t* it, size_t n) {
+  // flatten to (level,duration) list
+  static uint16_t dur[1200]; static uint8_t lvl[1200]; size_t m = 0;
+  for (size_t i = 0; i < n && m < 1198; i++) {
+    if (it[i].duration0) { dur[m] = it[i].duration0; lvl[m++] = it[i].level0; }
+    if (it[i].duration1) { dur[m] = it[i].duration1; lvl[m++] = it[i].level1; }
+  }
+  Serial.printf("[ir] burst symbols=%u first:", (unsigned)m);
+  for (size_t i = 0; i < m && i < 12; i++) Serial.printf(" %c%u", lvl[i] ? 'H' : 'L', dur[i]);
+  Serial.println();
+  // receiver output is active-low: L = carrier mark, H = space
+  uint8_t bytes[64]; int nb = 0, bit = 0; uint8_t cur = 0; int sections = 0;
+  String sect;
+  for (size_t i = 0; i + 1 < m; i++) {
+    if (lvl[i] != 0) continue;                   // look at mark, then its space
+    uint16_t mk = dur[i], sp = dur[i + 1];
+    if (mk > 2500) {                              // header mark (~3500)
+      if (bit || nb) { sect += String(nb) + "B "; }
+      sections++; nb = 0; bit = 0; cur = 0;
+      continue;
+    }
+    if (mk < 200 || mk > 800) continue;
+    if (sp > 2500) continue;                      // inter-section gap / footer
+    bool one = sp > 800;
+    if (one) cur |= (1 << bit);
+    if (++bit == 8) { if (nb < 64) bytes[nb] = cur; nb++; bit = 0; cur = 0;
+      Serial.printf("%02X ", bytes[nb - 1]); }
+  }
+  sect += String(nb) + "B";
+  Serial.printf("\n[ir] sections=%d lens: %s\n", sections, sect.c_str());
+  show("IR burst", String("sym ") + m + "\n" + sect);
+}
+
+void loop() {
+  M5.update();
+  size_t len = 0;
+  rmt_item32_t* it = (rmt_item32_t*)xRingbufferReceive(rb, &len, pdMS_TO_TICKS(50));
+  if (it) {
+    size_t n = len / sizeof(rmt_item32_t);
+    if (n >= 30) decodeBurst(it, n); else noiseFrames++;
+    vRingbufferReturnItem(rb, it);
+  }
+  if (millis() - lastReport > 5000) {
+    lastReport = millis();
+    Serial.printf("[ir] short/noise frames last 5s: %lu\n", (unsigned long)noiseFrames);
+    noiseFrames = 0;
+  }
+}

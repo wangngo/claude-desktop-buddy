@@ -73,10 +73,12 @@ void ownerSet(const char* name);
 const char* ownerName();
 #include "stats.h"
 #include "hal.h"
+#include "audio.h"
 
 inline bool xferCommand(JsonDocument& doc) {
   const char* cmd = doc["cmd"];
   if (!cmd) return false;
+  if (audioCommand(doc)) return true;
 
   if (strcmp(cmd, "name") == 0) {
     const char* n = doc["name"];

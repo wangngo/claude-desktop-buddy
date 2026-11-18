@@ -958,12 +958,14 @@ void drawHUD() {
 }
 
 void setup() {
+  Serial.setRxBufferSize(16384);   // audio chunks arrive in windows over USB
   auto cfg = M5.config();
   cfg.serial_baudrate = 115200;   // M5Unified skips Serial.begin when 0 (old M5StickCPlus lib always did it)
   M5.begin(cfg);
   M5.Lcd.setRotation(0);
 
   HBeep.begin();
+  audioInit();
   startBt();
   halLedInit();
   applyBrightness();
@@ -1006,11 +1008,13 @@ void setup() {
   }
 
   Serial.printf("buddy: %s\n", buddyMode ? "ASCII mode" : "GIF character loaded");
+  Serial.printf("buddy: psram %u KB free %u KB\n", (unsigned)(ESP.getPsramSize()/1024), (unsigned)(ESP.getFreePsram()/1024));
 }
 
 void loop() {
   M5.update();
   HBeep.update();
+  audioTick();
   t++;
   uint32_t now = millis();
 

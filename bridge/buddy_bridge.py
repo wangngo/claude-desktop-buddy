@@ -10,7 +10,7 @@ terminal prompt by returning an empty decision.
 The serial port is opened once and kept open: on macOS every open of the
 ESP32-S3 USB-Serial-JTAG port resets the chip.
 """
-import argparse, glob, json, logging, threading, time, uuid
+import argparse, base64, glob, json, logging, os, queue, subprocess, tempfile, threading, time, uuid, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import serial
@@ -21,6 +21,16 @@ log = logging.getLogger("buddy")
 # stick can't supply that, so they always go to the terminal.
 TERMINAL_ONLY_TOOLS = {"AskUserQuestion", "ExitPlanMode"}
 NONINTERACTIVE_MODES = {"dontAsk", "bypassPermissions"}
+VOICE = "Linh"               # macOS built-in vi_VN voice (offline, free)
+AUDIO_RATE = 16000
+AUDIO_MAX_S = 8
+CHUNK_RAW = 600              # bytes per audio line (base64 800 < device 1024 line buf)
+CHUNK_WINDOW = 8             # un-acked chunks in flight
+LONG_TURN_S = 20             # speak "xong" only for turns longer than this
+LIMIT_THRESHOLDS = (80, 90, 95)
+TOOL_VN = {"Bash": "chạy lệnh", "Edit": "sửa file", "Write": "ghi file",
+           "MultiEdit": "sửa file", "NotebookEdit": "sửa notebook",
+           "WebFetch": "truy cập web", "WebSearch": "tìm trên web"}
 SESSION_STALE_S = 30 * 60   # forget sessions with no event for this long
 KEEPALIVE_S = 10            # REFERENCE.md: device treats >30s silence as dead
 
@@ -44,6 +54,12 @@ class Bridge:
         self.msg = "Claude Code idle"
         self.prompts = []         # FIFO of pending Prompt
         self.rate = {}            # statusline rate_limits, latest seen
+        self.voice = True
+        self.audio_q = queue.Queue()
+        self.ack_cv = threading.Condition()
+        self.acks = {}            # ack name -> (count, last payload)
+        self.turn_start = {}      # session -> time of UserPromptSubmit
+        self.limit_said = set()   # (window, resets_at, threshold)
         self.dirty = threading.Event()
 
     # ---- serial ----
@@ -55,14 +71,42 @@ class Bridge:
         s.port, s.baudrate, s.timeout = ports[0], 115200, 0.2
         s.dtr = False; s.rts = False
         s.open()
-        log.info("opened %s, waiting for stick to boot", ports[0])
-        time.sleep(4)  # open resets the chip; let setup() finish
-        s.reset_input_buffer()
+        try:
+            return self._handshake(s, ports[0])
+        except Exception:
+            s.close()
+            raise
+
+    def _handshake(self, s, port):
+        log.info("opened %s, waiting for stick to boot", port)
+        # Opening the port resets the chip and boot time varies (PSRAM init),
+        # so a fixed sleep loses the first commands. Handshake instead: wait
+        # for setup()'s "buddy:" line, then poll owner until it is acked.
+        buf, end = b"", time.time() + 15
+        while time.time() < end and b"buddy:" not in buf:
+            buf += s.read(256)
+        ready = False
+        # owner only when configured: an empty name would wipe the stored one
+        probe, want = (({"cmd": "owner", "name": self.owner}, b'"ack":"owner"') if self.owner
+                       else ({"cmd": "sfx", "name": "none"}, b'"ack":"sfx"'))
+        for _ in range(10):
+            s.write((json.dumps(probe) + "\n").encode())
+            t = time.time() + 1.0
+            while time.time() < t:
+                buf += s.read(256)
+                if want in buf:
+                    ready = True; break
+            if ready:
+                break
+        if not ready:
+            log.warning("stick did not answer handshake; closing")
+            s.close()
+            time.sleep(2)
+            return False
         with self.ser_lock:
             self.ser = s
+        log.info("stick ready")
         self._write({"time": [int(time.time()), self.tz]})
-        if self.owner:
-            self._write({"cmd": "owner", "name": self.owner})
         self.dirty.set()
         return True
 
@@ -119,6 +163,12 @@ class Bridge:
         try:
             m = json.loads(line)
         except ValueError:
+            return
+        if "ack" in m:
+            with self.ack_cv:
+                c, _ = self.acks.get(m["ack"], (0, None))
+                self.acks[m["ack"]] = (c + 1, m)
+                self.ack_cv.notify_all()
             return
         if m.get("cmd") == "permission":
             with self.lock:
@@ -181,9 +231,17 @@ class Bridge:
             elif name == "UserPromptSubmit":
                 self._touch(sid, running=True)
                 self.msg = "working..."
+                self.turn_start[sid] = time.time()
             elif name in ("Stop", "StopFailure"):
                 self._touch(sid, running=False)
                 self.msg = "done" if name == "Stop" else "stopped (error)"
+                took = time.time() - self.turn_start.pop(sid, time.time())
+                if name == "StopFailure":
+                    self.sfx("error"); self.say("Claude gặp lỗi")
+                elif not ev.get("agent_id"):
+                    self.sfx("done")
+                    if took >= LONG_TURN_S:
+                        self.say("Xong rồi")
             elif name == "PreToolUse":
                 self._touch(sid, running=True)
                 self._entry(f"{ev.get('tool_name','?')}: {hint_for(ev)}")
@@ -191,6 +249,73 @@ class Bridge:
             else:
                 self._touch(sid)
         self.dirty.set()
+
+    # ---- audio ----
+    def sfx(self, name):
+        if self.voice:
+            self.audio_q.put(("sfx", name))
+
+    def say(self, text):
+        if self.voice:
+            self.audio_q.put(("say", text))
+
+    def _wait_ack(self, name, count, timeout=3.0):
+        end = time.time() + timeout
+        with self.ack_cv:
+            while self.acks.get(name, (0, None))[0] < count:
+                left = end - time.time()
+                if left <= 0:
+                    return None
+                self.ack_cv.wait(left)
+            return self.acks[name][1]
+
+    def _send_audio(self, pcm):
+        def acked(name):
+            with self.ack_cv:
+                return self.acks.get(name, (0, None))[0]
+        base = acked("audio_begin")
+        self._write({"cmd": "audio_begin", "rate": AUDIO_RATE, "len": len(pcm)})
+        a = self._wait_ack("audio_begin", base + 1)
+        if not a or not a.get("ok"):
+            log.info("audio_begin refused (%s)", a)   # muted on device, or no RAM
+            return False
+        chunks = [pcm[i:i + CHUNK_RAW] for i in range(0, len(pcm), CHUNK_RAW)]
+        base = acked("audio")
+        for i, c in enumerate(chunks):
+            if i >= CHUNK_WINDOW:
+                a = self._wait_ack("audio", base + i - CHUNK_WINDOW + 1)
+                if a is None or not a.get("ok"):
+                    log.warning("audio chunk %d/%d failed: %s", i, len(chunks), a); return False
+            self._write({"cmd": "audio", "d": base64.b64encode(c).decode()})
+        a = self._wait_ack("audio", base + len(chunks))
+        if a is None or not a.get("ok") or a.get("n") != len(pcm):
+            log.warning("audio incomplete: %s (want n=%d)", a, len(pcm)); return False
+        self._write({"cmd": "audio_end"})
+        return True
+
+    def audio_loop(self):
+        while True:
+            kind, arg = self.audio_q.get()
+            for _ in range(30):              # (re)connecting: wait, don't drop
+                if self.ser:
+                    break
+                time.sleep(0.5)
+            if not self.ser:
+                log.info("audio dropped (no stick): %s %r", kind, arg)
+                continue
+            try:
+                if kind == "sfx":
+                    self._write({"cmd": "sfx", "name": arg})
+                    time.sleep(0.4)
+                else:
+                    t0 = time.time()
+                    pcm = tts_pcm(arg)
+                    if self._send_audio(pcm):
+                        log.info("said %r (%.1fs audio, %.1fs total)", arg,
+                                 len(pcm) / 2 / AUDIO_RATE, time.time() - t0)
+                        time.sleep(len(pcm) / 2 / AUDIO_RATE)   # don't overlap clips
+            except Exception as e:
+                log.warning("audio %s failed: %s", kind, e)
 
     def on_statusline(self, st):
         rl = st.get("rate_limits")
@@ -200,6 +325,27 @@ class Bridge:
                 self.rate = rl
             if changed:
                 self.dirty.set()
+                self._check_limits(rl)
+
+    def _check_limits(self, rl):
+        names = {"five_hour": "5 giờ", "seven_day": "7 ngày"}
+        for key, vn in names.items():
+            w = rl.get(key)
+            if not isinstance(w, dict) or w.get("used_percentage") is None:
+                continue
+            pct = float(w["used_percentage"])
+            crossed = [t for t in LIMIT_THRESHOLDS if pct >= t]
+            if not crossed:
+                continue
+            tag = (key, w.get("resets_at"), crossed[-1])
+            with self.lock:
+                if tag in self.limit_said:
+                    continue
+                # mark every lower threshold too, so we only announce the highest
+                for t in crossed:
+                    self.limit_said.add((key, w.get("resets_at"), t))
+            self.sfx("warn")
+            self.say(f"Hạn mức {vn} đã dùng {int(pct)} phần trăm")
 
     def on_permission(self, ev, timeout):
         sid = ev.get("session_id", "?")
@@ -215,6 +361,7 @@ class Bridge:
             self.prompts.append(p)
         self.dirty.set()
         log.info("prompt %s %s: %s", p.id, p.tool, p.hint)
+        self.say("Claude xin " + TOOL_VN.get(tool, "dùng " + tool))
         # The clock starts when the stick actually shows this prompt, so a
         # prompt queued behind another still gets its full window.
         deadline = time.time() + timeout * 3      # hard cap while queued
@@ -253,6 +400,19 @@ def limits_for(rl, now):
     return out
 
 
+def tts_pcm(text):
+    """macOS `say` -> raw int16 LE mono PCM at AUDIO_RATE."""
+    fd, path = tempfile.mkstemp(suffix=".wav"); os.close(fd)
+    try:
+        subprocess.run(["/usr/bin/say", "-v", VOICE, "-o", path,
+                        "--file-format=WAVE", f"--data-format=LEI16@{AUDIO_RATE}", text],
+                       check=True, timeout=20, capture_output=True)
+        with wave.open(path, "rb") as w:
+            return w.readframes(min(w.getnframes(), AUDIO_RATE * AUDIO_MAX_S))
+    finally:
+        os.unlink(path)
+
+
 def hint_for(ev):
     ti = ev.get("tool_input") or {}
     for k in ("command", "file_path", "url", "pattern", "query", "prompt", "description"):
@@ -283,6 +443,10 @@ def make_handler(bridge, perm_timeout):
                 ev = json.loads(self.rfile.read(n) or b"{}")
             except Exception:
                 return self._reply({})
+            if self.path.startswith("/say"):
+                if ev.get("sfx"): bridge.sfx(ev["sfx"])
+                if ev.get("text"): bridge.say(str(ev["text"])[:200])
+                return self._reply({})
             if self.path.startswith("/statusline"):
                 bridge.on_statusline(ev)
                 return self._reply({})
@@ -312,6 +476,7 @@ def main():
     ap.add_argument("--listen", default="127.0.0.1:47830")
     ap.add_argument("--owner", default="")
     ap.add_argument("--perm-timeout", type=float, default=25.0)
+    ap.add_argument("--no-voice", action="store_true", help="no sfx / speech")
     ap.add_argument("-v", action="store_true")
     a = ap.parse_args()
     logging.basicConfig(level=logging.DEBUG if a.v else logging.INFO,
@@ -320,6 +485,8 @@ def main():
     b = Bridge(a.port, a.owner, tz)
     threading.Thread(target=b.serial_loop, daemon=True).start()
     threading.Thread(target=b.heartbeat_loop, daemon=True).start()
+    b.voice = not a.no_voice
+    threading.Thread(target=b.audio_loop, daemon=True).start()
     host, port = a.listen.rsplit(":", 1)
     srv = ThreadingHTTPServer((host, int(port)), make_handler(b, a.perm_timeout))
     log.info("listening on http://%s", a.listen)

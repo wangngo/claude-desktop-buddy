@@ -589,6 +589,13 @@ void drawInfo() {
     uint32_t age = (millis() - tama.lastUpdated) / 1000;
     ln("  last msg  %lus", (unsigned long)age);
     ln("  state     %s", stateNames[activeState]);
+    y += 8;
+    spr.setTextColor(p.text, p.bg);
+    ln("LIMITS");
+    spr.setTextColor(p.textDim, p.bg);
+    if (tama.lim5Pct == 0xFF && tama.lim7Pct == 0xFF) ln("  (no data yet)");
+    if (tama.lim5Pct != 0xFF) ln("  5h  %3u%%  %s", tama.lim5Pct, tama.lim5Reset);
+    if (tama.lim7Pct != 0xFF) ln("  7d  %3u%%  %s", tama.lim7Pct, tama.lim7Reset);
 
   } else if (infoPage == 3) {
     _infoHeader(p, y, "DEVICE", infoPage);
@@ -897,6 +904,21 @@ void drawHUD() {
 
   if (tama.lineGen != lastLineGen) { msgScroll = 0; lastLineGen = tama.lineGen; wake(); }
 
+  // Plan usage line just above the transcript, in the gap under the pet.
+  if (tama.lim5Pct != 0xFF || tama.lim7Pct != 0xFF) {
+    int ly = H - AREA - 11;
+    spr.fillRect(0, ly - 1, W, 10, p.bg);
+    spr.setCursor(4, ly);
+    if (tama.lim5Pct != 0xFF) {
+      spr.setTextColor(tama.lim5Pct >= 80 ? HOT : p.body, p.bg);
+      spr.printf("5h%3u%% %s", tama.lim5Pct, tama.lim5Reset);
+    }
+    if (tama.lim7Pct != 0xFF) {
+      spr.setTextColor(tama.lim7Pct >= 80 ? HOT : p.textDim, p.bg);
+      spr.printf(" 7d%u%%", tama.lim7Pct);
+    }
+  }
+
   if (tama.nLines == 0) {
     spr.setTextColor(p.text, p.bg);
     spr.setCursor(4, H - LH - 2);
@@ -936,7 +958,9 @@ void drawHUD() {
 }
 
 void setup() {
-  M5.begin();
+  auto cfg = M5.config();
+  cfg.serial_baudrate = 115200;   // M5Unified skips Serial.begin when 0 (old M5StickCPlus lib always did it)
+  M5.begin(cfg);
   M5.Lcd.setRotation(0);
 
   HBeep.begin();

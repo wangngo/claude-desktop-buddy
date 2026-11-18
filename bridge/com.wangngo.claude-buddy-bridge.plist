@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.wangngo.claude-buddy-bridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/wangngo/claude-desktop-buddy/bridge/.venv/bin/python</string>
+    <string>-u</string>
+    <string>/Users/wangngo/claude-desktop-buddy/bridge/buddy_bridge.py</string>
+    <string>--owner</string><string>W</string>
+    <string>--perm-timeout</string><string>25</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>StandardOutPath</key><string>/Users/wangngo/Library/Logs/claude-buddy-bridge.log</string>
+  <key>StandardErrorPath</key><string>/Users/wangngo/Library/Logs/claude-buddy-bridge.log</string>
+</dict>
+</plist>

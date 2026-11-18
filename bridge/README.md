@@ -1,0 +1,69 @@
+# Claude Code CLI bridge (USB serial)
+
+Connects **Claude Code in the terminal** to the stick over USB, without the
+Claude desktop app. Claude Code `http` hooks POST events to a small local
+daemon, which pushes the heartbeat snapshot from `REFERENCE.md` over the
+USB serial port. Permission prompts show up on the stick: **A = allow once,
+B = deny**.
+
+```
+Claude Code ──http hooks──▶ buddy_bridge.py (127.0.0.1:47830) ──USB CDC──▶ StickS3
+statusline ──statusline-tee.sh──┘   (rate_limits → "lim" field)
+```
+
+## Pieces
+
+| File | Role |
+|---|---|
+| `buddy_bridge.py` | daemon: HTTP on `127.0.0.1:47830`, holds the serial port open (each open resets the ESP32-S3) |
+| `statusline-tee.sh` | statusline wrapper: forwards the statusline JSON (has `rate_limits`) to `/statusline`, then runs `ccstatusline` unchanged |
+| `com.wangngo.claude-buddy-bridge.plist` | LaunchAgent, `KeepAlive`, log `~/Library/Logs/claude-buddy-bridge.log` |
+
+## Behaviour
+
+- **Permission prompt, stick attached**: the stick shows it and waits up to
+  25 s (`--perm-timeout`). No button press → the normal terminal prompt
+  appears. During the wait the terminal prompt is not shown.
+- **Stick unplugged**: the daemon answers at once, the terminal prompt shows as usual.
+- **Daemon down**: the hooks fail non-blocking, so Claude Code keeps working.
+- **Usage limits**: 5h / 7d `used_percentage` and reset time, read from the
+  statusline JSON (Pro/Max only, after the session's first API call). They are shown
+  in the HUD line above the transcript and on Info page "CLAUDE" → LIMITS.
+  The `lim` field is a bridge extension that stock firmware ignores.
+
+Health/debug: `curl -s http://127.0.0.1:47830/ | python3 -m json.tool`
+
+## Install (macOS)
+
+```bash
+cd bridge && uv venv .venv && uv pip install --python .venv/bin/python pyserial
+cp com.wangngo.claude-buddy-bridge.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.wangngo.claude-buddy-bridge.plist
+```
+
+Hooks (append to `~/.claude/settings.local.json` → `hooks`), each
+`{"type":"http","url":"http://127.0.0.1:47830/"}`: `SessionStart`,
+`SessionEnd`, `UserPromptSubmit`, `Stop`, `PreToolUse` (matcher `*`),
+`PermissionRequest` (matcher `*`, `timeout: 30`, `onFailure: "continue"`).
+Statusline: point `statusLine.command` in `~/.claude/settings.json` at
+`statusline-tee.sh`. The real command defaults to `~/.local/bin/ccstatusline`
+and can be overridden with `BUDDY_REAL_STATUSLINE`.
+
+## Uninstall
+
+```bash
+launchctl bootout gui/$(id -u)/com.wangngo.claude-buddy-bridge
+rm ~/Library/LaunchAgents/com.wangngo.claude-buddy-bridge.plist
+```
+Then remove the hook entries whose url is `http://127.0.0.1:47830/` from
+`settings.local.json` and restore `statusLine.command` (the backups
+`settings*.json.bak-buddy-<timestamp>` sit next to them).
+
+## Gotchas
+
+- Opening `/dev/cu.usbmodem*` on macOS resets the StickS3. Never open it from
+  a per-event script; only the daemon holds it. Stop the LaunchAgent before
+  `pio run -t upload`/`uploadfs` (the port is busy), then start it again with
+  `launchctl kickstart gui/$(id -u)/com.wangngo.claude-buddy-bridge`.
+- StickS3 side button is the M5PM1 power key. Single click resets, double
+  click powers off, and holding ~2 s (green LED blinks) enters download mode.

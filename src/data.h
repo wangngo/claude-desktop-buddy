@@ -19,6 +19,11 @@ struct TamaState {
   char     promptId[40];     // pending permission request ID; empty = no prompt
   char     promptTool[20];
   char     promptHint[44];
+  // Plan usage limits (bridge extension "lim"; absent from the stock desktop
+  // protocol). pct 0xFF = window unknown. Reset strings are pre-formatted
+  // local time from the bridge so the device needn't know epoch/timezone.
+  uint8_t  lim5Pct = 0xFF, lim7Pct = 0xFF;
+  char     lim5Reset[12], lim7Reset[12];
 };
 
 // ---------------------------------------------------------------------------
@@ -112,6 +117,14 @@ static void _applyJson(const char* line, TamaState* out) {
       out->lineGen++;
     }
     out->nLines = n;
+  }
+  JsonObject lim = doc["lim"];
+  if (!lim.isNull()) {
+    out->lim5Pct = lim["h5"].is<int>() ? (uint8_t)(lim["h5"] | 0) : 0xFF;
+    out->lim7Pct = lim["d7"].is<int>() ? (uint8_t)(lim["d7"] | 0) : 0xFF;
+    const char* r5 = lim["h5t"]; const char* r7 = lim["d7t"];
+    strncpy(out->lim5Reset, r5 ? r5 : "", sizeof(out->lim5Reset)-1); out->lim5Reset[sizeof(out->lim5Reset)-1]=0;
+    strncpy(out->lim7Reset, r7 ? r7 : "", sizeof(out->lim7Reset)-1); out->lim7Reset[sizeof(out->lim7Reset)-1]=0;
   }
   JsonObject pr = doc["prompt"];
   if (!pr.isNull()) {

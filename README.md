@@ -78,6 +78,13 @@ If discovery isn't finding the stick:
 | **Shake**               | dizzy                |             |             | —           |
 | **Face-down**           | nap (energy refills) |             |             |             |
 
+**M5StickS3:** the side button belongs to the M5PM1 power chip, not the
+firmware. A single click **resets** the device (it does not toggle the screen),
+a double click powers it off, and holding it for ~2 s enters download mode.
+The S3 has no user LED. Build with `pio run -e m5sticks3` (the default env).
+To drive it from **Claude Code in the terminal** over USB instead of the
+desktop app, see [`bridge/README.md`](bridge/README.md).
+
 The screen auto-powers-off after 30s of no interaction (kept on while an
 approval prompt is up). Any button press wakes it.
 

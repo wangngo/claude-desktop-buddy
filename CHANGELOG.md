@@ -1,5 +1,10 @@
 # Changelog (fork wangngo/claude-desktop-buddy)
 
+## 2026-11-18 (4) — big-type UI, Clawd, IMU gestures
+- Landscape dashboard (240x135) and approval screen with large fonts and coloured 5h/7d bars; Clawd mascot pixel-drawn from the Claude Code logo, moods: sleep / idle bob / busy hop / wait wiggle+! / celebrate / dizzy.
+- IMU (BMI270, verified on device: flat az≈+1.01, upright |ay|≈0.8–0.95, sideways |ax|≈0.99): upright → portrait list of recent commands, sideways → dashboard (auto flips 180°), face-down → do-not-disturb (screen off, muted, stick sends {"evt":"dnd"} so the bridge leaves prompts to the terminal), shake → dizzy Clawd.
+- `imu` debug command + bridge `/imu`; rate limits per session (two accounts).
+
 ## 2026-11-18 (3) — BLE transport
 - bridge: `BleLink` (bleak, NUS, bonded passkey pairing). Fallback when there is no USB, switches back when the cable returns. Write-without-response + line acks; speech at 8 kHz over BLE: 3.3 s clip in 5.7 s (was 37 s with per-packet responses). Verified: pairing, reconnect via bond after a daemon restart, speech, permission allow by button over BLE.
 - firmware: BLE RX ring 2 KB → 8 KB (flash pending, needs USB).

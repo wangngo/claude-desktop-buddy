@@ -15,6 +15,7 @@ static const uint8_t  AUDIO_VOLUME   = 150;            // of 255 (~59%)
 static const uint32_t AUDIO_MAX_LEN  = 16000 * 2 * 8;  // 8 s @16 kHz int16
 static const int      CH_CLIP = 0, CH_SFX = 7;          // sfx never cuts speech
 
+extern bool napping;                   // face-down = do-not-disturb (main.cpp)
 static int16_t* _aBuf = nullptr;
 static uint32_t _aLen = 0, _aCap = 0, _aRate = 16000;
 
@@ -35,7 +36,7 @@ inline void audioInit() {
 }
 
 inline void sfxPlay(const char* name) {
-  if (!settings().sound || !name) return;
+  if (!settings().sound || napping || !name) return;
   if      (!strcmp(name, "done"))   { _sfx = SFX_DONE;   _sfxN = 2; }
   else if (!strcmp(name, "error"))  { _sfx = SFX_ERROR;  _sfxN = 2; }
   else if (!strcmp(name, "warn"))   { _sfx = SFX_WARN;   _sfxN = 3; }
@@ -73,7 +74,7 @@ inline bool audioCommand(JsonDocument& doc) {
     M5.Speaker.stop(CH_CLIP);
     for (int i = 0; i < 50 && M5.Speaker.isPlaying(CH_CLIP); i++) delay(2);
     _aLen = 0;
-    bool ok = _aBuf && len > 0 && len <= _aCap && settings().sound;
+    bool ok = _aBuf && len > 0 && len <= _aCap && settings().sound && !napping;
     _xAck("audio_begin", ok, 0);
     return true;
   }

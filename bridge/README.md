@@ -53,6 +53,15 @@ slot, so Claude Desktop's Hardware Buddy can't connect at the same time
   `--no-voice`. Test: `curl -XPOST localhost:47830/say -d '{"text":"xin chào"}'`
   or `-d '{"sfx":"done"}'`.
 
+- **Gestures (stick IMU)**:
+  - stand upright → portrait list of recent commands;
+  - lay sideways → landscape dashboard;
+  - face down → do-not-disturb: screen off, muted, and prompts stay in the terminal;
+  - shake → dizzy Clawd.
+- **WiFi**: provision once with `curl -XPOST localhost:47830/wifi_set -d '{"ssid":"…","psk":"…"}'`
+  (2.4 GHz only). The key lives in `~/.config/claude-buddy/state.json` (0600).
+  Traffic is HMAC-authenticated but **not encrypted** on the LAN.
+
 Health/debug: `curl -s http://127.0.0.1:47830/ | python3 -m json.tool`
 
 ## Install (macOS)

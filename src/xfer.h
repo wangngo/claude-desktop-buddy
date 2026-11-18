@@ -82,6 +82,13 @@ inline bool xferCommand(JsonDocument& doc) {
   if (!cmd) return false;
   if (audioCommand(doc)) return true;
   if (wifiCommand(doc)) return true;
+  if (strcmp(cmd, "imu") == 0) {          // debug: raw accel in g
+    float ax, ay, az; M5.Imu.getAccelData(&ax, &ay, &az);
+    char b[96];
+    int n = snprintf(b, sizeof(b), "{\"ack\":\"imu\",\"ok\":true,\"n\":0,\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f}\n", ax, ay, az);
+    Serial.write(b, n); bleWrite((const uint8_t*)b, n); wifiWrite((const uint8_t*)b, n);
+    return true;
+  }
 
   if (strcmp(cmd, "name") == 0) {
     const char* n = doc["name"];

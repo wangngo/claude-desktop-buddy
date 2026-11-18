@@ -213,6 +213,7 @@ class Bridge:
         self.rate_by_sess = {}    # session_id -> (rate_limits, time seen)
         self.last_active = {}     # session_id -> time of last hook activity
         self.voice = True
+        self.dnd = False          # stick face-down: do-not-disturb
         self.audio_q = queue.Queue()
         self.ack_cv = threading.Condition()
         self.acks = {}            # ack name -> (count, last payload)
@@ -311,6 +312,9 @@ class Bridge:
             self._write({"cmd": "owner", "name": self.owner})
         self.dirty.set()
         return True
+
+    def _reset_link_state(self):
+        self.dnd = False
 
     def wifi_provision(self, ssid, psk):
         """Send WiFi creds + auth key to the stick over the current link."""
@@ -413,6 +417,10 @@ class Bridge:
                 c, _ = self.acks.get(m["ack"], (0, None))
                 self.acks[m["ack"]] = (c + 1, m)
                 self.ack_cv.notify_all()
+            return
+        if m.get("evt") == "dnd":
+            self.dnd = bool(m.get("on"))
+            log.info("do-not-disturb %s", "on" if self.dnd else "off")
             return
         if m.get("cmd") == "permission":
             with self.lock:
@@ -611,7 +619,8 @@ class Bridge:
         if (not self.ser                                   # stick not attached
                 or tool in TERMINAL_ONLY_TOOLS             # needs updatedInput
                 or ev.get("agent_id")                      # subagent / teammate
-                or ev.get("permission_mode") in NONINTERACTIVE_MODES):
+                or ev.get("permission_mode") in NONINTERACTIVE_MODES
+                or self.dnd):                              # face-down: ask in terminal
             return None  # let Claude Code's own flow decide
         p = Prompt("p" + uuid.uuid4().hex[:6], sid, tool, hint_for(ev))
         with self.lock:
@@ -701,6 +710,11 @@ def make_handler(bridge, perm_timeout):
                 ev = json.loads(self.rfile.read(n) or b"{}")
             except Exception:
                 return self._reply({})
+            if self.path.startswith("/imu"):
+                with bridge.ack_cv:
+                    base = bridge.acks.get("imu", (0, None))[0]
+                bridge._write({"cmd": "imu"})
+                return self._reply(bridge._wait_ack("imu", base + 1, 3) or {"ok": False})
             if self.path.startswith("/wifi_set"):
                 return self._reply(bridge.wifi_provision(str(ev.get("ssid", "")), str(ev.get("psk", ""))))
             if self.path.startswith("/say"):

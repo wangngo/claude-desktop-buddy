@@ -109,7 +109,7 @@ static void wake() {
 bool     responseSent = false;
 
 static void beep(uint16_t freq, uint16_t dur) {
-  if (settings().sound) HBeep.tone(freq, dur);
+  if (settings().sound && !napping) HBeep.tone(freq, dur);
 }
 
 static void sendCmd(const char* json) {
@@ -1284,10 +1284,13 @@ void loop() {
   if (!napping && faceDownFrames >= 15) {
     napping = true;
     napStartMs = now;
-    HAxp.ScreenBreath(8);
-    dimmed = true;
+    HAxp.SetLDO2(false);          // face-down = do-not-disturb: screen off, muted
+    M5.Speaker.stop();
+    sendCmd("{\"evt\":\"dnd\",\"on\":true}");
   } else if (napping && faceDownFrames <= -8) {
     napping = false;
+    HAxp.SetLDO2(true); applyBrightness();
+    sendCmd("{\"evt\":\"dnd\",\"on\":false}");
     statsOnNapEnd((now - napStartMs) / 1000);
     statsOnWake();
     wake();

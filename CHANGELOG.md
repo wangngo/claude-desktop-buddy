@@ -1,5 +1,17 @@
 # Changelog (fork wangngo/claude-desktop-buddy)
 
+## 2026-11-18 (5) — power monitor, WiFi heat fix, on-stick web UI, Daikin IR
+- `src/power_mon.h`: 5 s samples (VBAT, voltage-%, PM1 charge flag, ESP32 die temp), `{"evt":"pwr"}` every 30 s → bridge `~/.config/claude-buddy/power.csv`; 2 h RAM history; reset reason; `power_log`, `pm1` (read-only PMIC diag) commands. M5PM1 has NO current sense (datasheet v1.9) — `GetBatCurrent()` is meaningless on S3; DEVICE page now uses power_mon.
+- Battery icon on dashboard (landscape top-left, portrait top-right).
+- WiFi heat root cause: core auto-reconnect re-runs begin() on every NO_AP_FOUND (WiFiGeneric.cpp:1084) → endless all-channel scanning. Fix: `setAutoReconnect(false)`, own backoff 15s→60s→5min, radio OFF between tries, give up after 10. Die temp 58 → 50 °C (short observation).
+- Resets under load (reset reason 0 = USB/glitch, unmapped in IDF 4.4): WiFi active scan at 20 dBm 3/3 reset; 15 dBm / passive 0/7 → TX power capped at 15 dBm (STA, AP, scans); web scan passive.
+- EXT_5V boost is ON from boot (M5Unified `cfg.output_power=true`, 5VOUT 5.16 V); re-enabling it at runtime reset the stick → IR send only ever turns it on. Boost off → 5VOUT 0.94 V (USB does NOT feed EXT_5V).
+- `src/web_ui.h` + `web_page.h`: web page on port 80 (STA or SoftAP setup from menu → wifi, 5 min). Basic auth `buddy` + 6-digit PIN (NVS, shown on DEVICE page / setup card), 5-fail lockout, X-Buddy header on POST, Host check. Brightness, auto-off (+on USB), volume, sound, WiFi on/off/scan/set, reboot, AC panel, 2 h battery/temp chart. Built + flashed, NOT tested live (no 2.4 GHz network joinable).
+- `src/ac_ir.h`: Daikin via IRremoteESP8266 2.9.0 IRac (send-only, 8 variants), state in NVS; serial/web `ac` command. 8 variants sent 21:57 — AC response not confirmed.
+- `src/ir_capture.h` + `tools/ir_capture.py`: raw edge capture on G42 → host analysis. Boost noise ~35k edges/s; Daikin marks (~430 us) visible with remote pressed, but 1-bit spaces corrupted → no decode. IR paused by W.
+- New settings in NVS: bright, vol, offSec, offUsb. Diag serial cmds: `spk`, `chg`, `bri`.
+- Audible whine only on USB (W); charging-off listening test done (result pending from W). USB drops/resets on power-state changes while on USB (charge re-enable, boost off).
+
 ## 2026-11-18 (4) — big-type UI, Clawd, IMU gestures
 - Landscape dashboard (240x135) and approval screen with large fonts and coloured 5h/7d bars; Clawd mascot pixel-drawn from the Claude Code logo, moods: sleep / idle bob / busy hop / wait wiggle+! / celebrate / dizzy.
 - IMU (BMI270, verified on device: flat az≈+1.01, upright |ay|≈0.8–0.95, sideways |ax|≈0.99): upright → portrait list of recent commands, sideways → dashboard (auto flips 180°), face-down → do-not-disturb (screen off, muted, stick sends {"evt":"dnd"} so the bridge leaves prompts to the terminal), shake → dizzy Clawd.

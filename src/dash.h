@@ -203,8 +203,35 @@ static const char* _stateWord(uint8_t st, uint16_t* col) {
   return WORD[st];
 }
 
+// Battery icon 22x10 (+2px tip) at (x,y). Fill colour: green >50, yellow >20,
+// red below; cyan when charging (voltage-% reads high while charging).
+static void _batt(LovyanGFX& g, int x, int y, const Palette& p) {
+  const PwrSample& s = power();
+  g.drawRect(x, y, 22, 10, p.textDim);
+  g.fillRect(x + 22, y + 3, 2, 4, p.textDim);
+  if (s.pct >= 0) {
+    uint16_t c = s.chg ? 0x07FF : s.pct > 50 ? 0x07E0 : s.pct > 20 ? 0xFFE0 : 0xF800;
+    int w = (18 * s.pct + 50) / 100;
+    if (w > 0) g.fillRect(x + 2, y + 2, w, 6, c);
+  }
+}
+
+// "87%" (or "--%") right-aligned at rx, vertically centred on cy, Font0.
+static void _battPct(LovyanGFX& g, int rx, int cy, const Palette& p) {
+  const PwrSample& s = power();
+  char b[8];
+  if (s.pct >= 0) snprintf(b, sizeof(b), "%s%d%%", s.chg ? "+" : "", s.pct);
+  else snprintf(b, sizeof(b), "--%%");
+  g.setFont(&fonts::Font0); g.setTextSize(1);
+  g.setTextDatum(middle_right);
+  g.setTextColor(p.textDim, p.bg);
+  g.drawString(b, rx, cy);
+}
+
 static void _dashHome(const Palette& p) {
   dash.fillSprite(p.bg);
+  _batt(dash, 4, 4, p);
+  _battPct(dash, 56, 9, p);
   _pet(dash, 58, 76, 5, p);
 
   uint16_t c; const char* w = _stateWord(activeState, &c);
@@ -233,9 +260,36 @@ static void _dashHome(const Palette& p) {
   dash.drawString(ln, 3, 120);
 }
 
+// SoftAP setup card (landscape): what to join, where to browse, the PIN.
+static void _dashAp(const Palette& p) {
+  dash.fillSprite(p.bg);
+  dash.setTextDatum(top_left);
+  dash.setFont(&fonts::FreeSansBold9pt7b);
+  dash.setTextColor(CLAWD_ORANGE, p.bg);
+  dash.drawString("WIFI SETUP", 4, 2);
+  char b[40];
+  snprintf(b, sizeof(b), "%lus", (unsigned long)wifiApLeftSec());
+  dash.setTextDatum(top_right); dash.setTextColor(p.textDim, p.bg);
+  dash.drawString(b, 236, 2);
+  dash.setTextDatum(top_left);
+  dash.setFont(&fonts::Font2);
+  int y = 26;
+  const char* L[][2] = {{"wifi", wifiApSsid()}, {"pass", wifiApPass()},
+                        {"open", wifiIpStr()}, {"user", "buddy"}, {"PIN", webPin()}};
+  for (auto& r : L) {
+    dash.setTextColor(p.textDim, p.bg); dash.drawString(r[0], 4, y);
+    dash.setTextColor(p.text, p.bg);    dash.drawString(r[1], 48, y);
+    y += 18;
+  }
+  dash.setTextColor(p.textDim, p.bg);
+  dash.drawString("2.4 GHz only", 4, 118);
+}
+
 // Portrait: small Clawd, then recent commands in readable type.
 static void _dashTall(const Palette& p) {
   spr.fillSprite(p.bg);
+  _battPct(spr, 104, 7, p);
+  _batt(spr, 107, 2, p);
   _pet(spr, 67, 44, 3, p);
   uint16_t c; const char* w = _stateWord(activeState, &c);
   spr.setFont(&fonts::FreeSansBold9pt7b);
@@ -293,7 +347,12 @@ static bool dashTick() {
   dashUpdateRot();
   const Palette& p = characterPalette();
   M5.Lcd.setRotation(dashRot);
-  if (dashPortrait && !tama.promptId[0]) {
+  if (wifiApActive() && !tama.promptId[0]) {
+    if (dashRot != 1 && dashRot != 3) { dashRot = 1; }
+    M5.Lcd.setRotation(dashRot);
+    _dashAp(p);
+    dash.pushSprite(0, 0);
+  } else if (dashPortrait && !tama.promptId[0]) {
     _dashTall(p);
     spr.pushSprite(0, 0);
   } else {

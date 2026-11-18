@@ -10,11 +10,19 @@
 - [ ] IR Daikin (deferred by W): RX unusable (EXT_5V boost noise ~8.7kHz on G42, see CHANGELOG). Next: W reads remote model (ARC…) → pick IRremoteESP8266 Daikin variant, or trial-send variants and listen for the AC beep. FAQ fix to try: full battery / load on Grove.
 - [ ] Mic: push-to-talk voice approve ("được"/"không") — option 2 from the mic/speaker menu (not started).
 - [ ] Flash firmware with BLE RX 8 KB (src/ble_bridge.cpp) — needs USB.
-- [ ] WiFi network: stick can't see 'Quang4G' (code 1 NO_SSID_AVAIL; 5 GHz?). Waiting for W: a 2.4 GHz SSID (scan saw 'Verizon-SONIM-H500_5D_2.4G' at -19 dBm). Then `curl -XPOST localhost:47830/wifi_set -d '{"ssid":..,"psk":..}'`.
+- [ ] WiFi: 'Quang4G' IS on 2.4 GHz (ch11, -40 dBm, WPA2/WPA3 mixed) but joins time out silently (code 6, no disconnect reason). W to check router: MAC filter / client limit / band steering / set WPA2-only, or try phone 2.4 GHz hotspot.
+- [ ] Test web UI live (src/web_ui.h) once joined: auth/PIN, lockout, X-Buddy, settings, scan, wifi set, chart, reboot; SoftAP setup flow from menu.
+- [ ] IR (paused by W): Daikin variant unknown (8 sent 21:57, no confirmation). Onboard RX unusable (boost noise, USB doesn't feed EXT_5V). Options: camera check of LED, software filter, external VS1838B on HAT 3V3.
+- [ ] Audible whine on USB only: ask W result of charge-off window (22:18:24–34); try wall charger / other cable.
+- [ ] USB drop/reset on power-state change while on USB (charge re-enable, boost off) — investigate (rawRst via `pm1`).
+- [ ] Remove/keep diag cmds (`spk`, `chg`, `bri`, `ir_capture`, wifi_scan `passive`/`txp`) before merging.
 - [ ] Menus/settings/info screens still small portrait type.
 - [ ] WiFi (LAN transport + OTA + device HTTP API for AC) — agreed order IR→BT→WiFi, IR deferred.
 
 ## Done
+- [x] Power monitor + battery icon + power.csv (2026-11-18).
+- [x] WiFi heat fix (no core auto-reconnect, backoff, radio off, give-up) + TX cap 15 dBm (2026-11-18).
+- [x] Web UI + Daikin IR send + IR capture tooling built & flashed (2026-11-18, web untested live).
 - [x] IMU axes verified + gestures (portrait list / landscape dash / face-down DND / shake) (2026-11-18).
 - [x] Big-type landscape UI + Clawd (2026-11-18).
 - [x] Speaker voice (macOS say Linh) + sfx, PSRAM on (2026-11-18).

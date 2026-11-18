@@ -179,13 +179,17 @@ inline uint8_t statsFedProgress() {
 struct Settings {
   bool sound;
   bool bt;
-  bool wifi;     // placeholder — no WiFi stack linked yet, just stores the pref
+  bool wifi;     // join the saved network at boot (STA)
   bool led;
   bool hud;
   uint8_t clockRot;  // 0=auto 1=portrait 2=landscape
+  uint8_t bright;    // 0..4 → backlight 20..100%
+  uint8_t vol;       // speaker volume 0..255
+  uint16_t offSec;   // screen auto-off after N s idle, 0 = never
+  bool offUsb;       // also auto-off while on USB power
 };
 
-static Settings _settings = { true, true, false, true, true, 0 };
+static Settings _settings = { true, true, false, true, true, 0, 4, 150, 30, false };
 
 inline void settingsLoad() {
   _prefs.begin("buddy", true);
@@ -196,6 +200,11 @@ inline void settingsLoad() {
   _settings.hud      = _prefs.getBool("s_hud", true);
   _settings.clockRot = _prefs.getUChar("s_crot", 0);
   if (_settings.clockRot > 2) _settings.clockRot = 0;
+  _settings.bright   = _prefs.getUChar("s_bri", 4);
+  if (_settings.bright > 4) _settings.bright = 4;
+  _settings.vol      = _prefs.getUChar("s_vol", 150);
+  _settings.offSec   = _prefs.getUShort("s_off", 30);
+  _settings.offUsb   = _prefs.getBool("s_offu", false);
   _prefs.end();
 }
 
@@ -207,6 +216,10 @@ inline void settingsSave() {
   _prefs.putBool("s_led", _settings.led);
   _prefs.putBool("s_hud", _settings.hud);
   _prefs.putUChar("s_crot", _settings.clockRot);
+  _prefs.putUChar("s_bri", _settings.bright);
+  _prefs.putUChar("s_vol", _settings.vol);
+  _prefs.putUShort("s_off", _settings.offSec);
+  _prefs.putBool("s_offu", _settings.offUsb);
   _prefs.end();
 }
 

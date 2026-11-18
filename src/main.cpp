@@ -157,6 +157,7 @@ static void applySetting(uint8_t idx) {
     case 0:
       brightLevel = (brightLevel + 1) % 5;
       applyBrightness();
+      s.bright = brightLevel; settingsSave();
       return;
     case 1: s.sound = !s.sound; break;
     case 2:
@@ -166,7 +167,10 @@ static void applySetting(uint8_t idx) {
       // hard-off someday, stop advertising via BLEDevice::getAdvertising().
       s.bt = !s.bt;
       break;
-    case 3: s.wifi = !s.wifi; break;   // stored only — no WiFi stack linked
+    case 3:   // WiFi setup: SoftAP + web page for 5 min (card shows on screen)
+      wifiApStart();
+      settingsOpen = false; menuOpen = false; characterInvalidate();
+      return;
     case 4: s.led = !s.led; break;
     case 5: s.hud = !s.hud; break;
     case 6: s.clockRot = (s.clockRot + 1) % 3; break;
@@ -602,14 +606,14 @@ void drawInfo() {
   } else if (infoPage == 3) {
     _infoHeader(p, y, "DEVICE", infoPage);
 
-    int vBat_mV = (int)(HAxp.GetBatVoltage() * 1000);
-    int iBat_mA = (int)HAxp.GetBatCurrent();
-    int vBus_mV = (int)(HAxp.GetVBusVoltage() * 1000);
-    int pct = (vBat_mV - 3200) / 10;   // (v-3.2)/(4.2-3.2)*100 = (v-3.2)*100 = (mv-3200)/10
-    if (pct < 0) pct = 0; if (pct > 100) pct = 100;
-    bool usb = vBus_mV > 4000;
-    bool charging = usb && iBat_mA > 1;
-    bool full = usb && vBat_mV > 4100 && iBat_mA < 10;
+    // M5PM1 (StickS3) has no current sense: use power_mon's sample
+    // (voltage, voltage-derived %, PMIC charge flag).
+    const PwrSample& ps = power();
+    int vBat_mV = ps.mV;
+    int pct = ps.pct < 0 ? 0 : ps.pct;
+    bool charging = ps.chg;
+    bool usb = charging || HAxp.GetVBusVoltage() > 4.0f;
+    bool full = usb && !charging && vBat_mV > 4100;
 
     spr.setTextColor(p.text, p.bg);
     spr.setTextSize(2);
@@ -623,8 +627,9 @@ void drawInfo() {
 
     spr.setTextColor(p.textDim, p.bg);
     ln("  battery  %d.%02dV", vBat_mV/1000, (vBat_mV%1000)/10);
-    ln("  current  %+dmA", iBat_mA);
-    if (usb) ln("  usb in   %d.%02dV", vBus_mV/1000, (vBus_mV%1000)/10);
+    ln("  wifi     %s", wifiStateName());
+    if (wifiIpStr()[0]) ln("  web      %s", wifiIpStr());
+    if (wifiIpStr()[0]) ln("  pin      %s", webPin());
     y += 8;
 
     spr.setTextColor(p.text, p.bg);
@@ -976,6 +981,10 @@ void setup() {
   lastInteractMs = millis();
   statsLoad();
   settingsLoad();
+  brightLevel = settings().bright;
+  applyBrightness();
+  M5.Speaker.setVolume(settings().vol);
+  acLoad();
   wifiInit();
   petNameLoad();
   buddyInit();
@@ -1022,6 +1031,7 @@ void loop() {
   HBeep.update();
   audioTick();
   wifiTick();
+  powerTick();
   t++;
   uint32_t now = millis();
 
@@ -1299,11 +1309,12 @@ void loop() {
   // millis() not the cached `now`: wake() runs after `now` is captured,
   // so now - lastInteractMs underflows when a button is held → flicker.
   // No auto-off on USB power — clock face wants to stay visible while charging.
-  if (!screenOff && !inPrompt && !_onUsb
-      && millis() - lastInteractMs > SCREEN_OFF_MS) {
+  uint32_t offMs = (uint32_t)settings().offSec * 1000;
+  if (!screenOff && !inPrompt && offMs && (!_onUsb || settings().offUsb) && !wifiApActive()
+      && millis() - lastInteractMs > offMs) {
     HAxp.SetLDO2(false);
     screenOff = true;
   }
 
-  delay(screenOff ? 100 : 16);
+  delay(screenOff ? (webRecent() ? 10 : 100) : 16);
 }

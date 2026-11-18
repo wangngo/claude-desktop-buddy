@@ -76,12 +76,43 @@ const char* ownerName();
 #include "stats.h"
 #include "hal.h"
 #include "audio.h"
+#include "power_mon.h"
+#include "ac_ir.h"
+#include "ir_capture.h"
 
 inline bool xferCommand(JsonDocument& doc) {
   const char* cmd = doc["cmd"];
   if (!cmd) return false;
   if (audioCommand(doc)) return true;
   if (wifiCommand(doc)) return true;
+  if (powerCommand(doc)) return true;
+  if (pm1Command(doc)) return true;
+  if (irCaptureCommand(doc)) return true;
+  if (strcmp(cmd, "chg") == 0) {          // diag: {"cmd":"chg","on":false} pauses battery charging
+    bool on = doc["on"] | true;
+    M5.Power.setBatteryCharge(on);
+    _xAck("chg", true);
+    return true;
+  }
+  if (strcmp(cmd, "bri") == 0) {          // diag: {"cmd":"bri","pct":20} backlight, not saved
+    HAxp.ScreenBreath(doc["pct"] | 100);
+    _xAck("bri", true);
+    return true;
+  }
+  if (strcmp(cmd, "spk") == 0) {          // diag: {"cmd":"spk","on":false} stops speaker/amp
+    bool on = doc["on"] | true;
+    if (on) { M5.Speaker.begin(); M5.Speaker.setVolume(settings().vol); } else M5.Speaker.end();
+    _xAck("spk", true);
+    return true;
+  }
+  if (strcmp(cmd, "ac") == 0) {           // {"cmd":"ac", power,temp,delta,mode,fan,proto}
+    bool ok = acApply(doc);
+    JsonDocument r; r["ack"] = "ac"; r["ok"] = ok; r["n"] = 0;
+    acToJson(r["ac"].to<JsonObject>());
+    String out; serializeJson(r, out); out += "\n";
+    Serial.print(out); bleWrite((const uint8_t*)out.c_str(), out.length()); wifiWrite((const uint8_t*)out.c_str(), out.length());
+    return true;
+  }
   if (strcmp(cmd, "imu") == 0) {          // debug: raw accel in g
     float ax, ay, az; M5.Imu.getAccelData(&ax, &ay, &az);
     char b[96];
@@ -251,3 +282,4 @@ inline uint32_t xferProgress() { return _xTotalWritten; }
 inline uint32_t xferTotal() { return _xTotal; }
 
 #include "wifi_impl.h"   // after _xAck users; shares settings() with this TU
+#include "web_ui.h"     // web page + JSON API on port 80 (needs wifi_impl internals)

@@ -313,6 +313,21 @@ class Bridge:
         self.dirty.set()
         return True
 
+    POWER_CSV = os.path.join(CONF_DIR, "power.csv")
+    POWER_COLS = ("ts", "up", "mV", "pct", "chg", "tC", "wifi", "bri", "rst")
+
+    def _log_power(self, m):
+        """Append one {"evt":"pwr"} sample from the stick to power.csv."""
+        try:
+            new = not os.path.exists(self.POWER_CSV)
+            with open(self.POWER_CSV, "a") as f:
+                if new:
+                    f.write(",".join(self.POWER_COLS) + "\n")
+                row = [time.strftime("%Y-%m-%d %H:%M:%S")] + [str(m.get(k, "")) for k in self.POWER_COLS[1:]]
+                f.write(",".join(row) + "\n")
+        except OSError as e:
+            log.warning("power.csv: %s", e)
+
     def _reset_link_state(self):
         self.dnd = False
 
@@ -417,6 +432,9 @@ class Bridge:
                 c, _ = self.acks.get(m["ack"], (0, None))
                 self.acks[m["ack"]] = (c + 1, m)
                 self.ack_cv.notify_all()
+            return
+        if m.get("evt") == "pwr":
+            self._log_power(m)
             return
         if m.get("evt") == "dnd":
             self.dnd = bool(m.get("on"))

@@ -56,7 +56,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.wangngo.claude-buddy
 Hooks (append to `~/.claude/settings.local.json` → `hooks`), each
 `{"type":"http","url":"http://127.0.0.1:47830/"}`: `SessionStart`,
 `SessionEnd`, `UserPromptSubmit`, `Stop`, `PreToolUse` (matcher `*`),
-`PermissionRequest` (matcher `*`, `timeout: 30`, `onFailure: "continue"`).
+`PermissionRequest` (matcher `*`, `timeout: 30`, `onFailure: "continue"`). Also `StopFailure`
+(API error at the end of a turn → error tone + "Claude gặp lỗi").
 Statusline: point `statusLine.command` in `~/.claude/settings.json` at
 `statusline-tee.sh`. The real command defaults to `~/.local/bin/ccstatusline`
 and can be overridden with `BUDDY_REAL_STATUSLINE`.

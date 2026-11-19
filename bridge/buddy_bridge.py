@@ -55,7 +55,8 @@ class BleLink:
     def __init__(self, on_line):
         self.on_line = on_line
         self.loop = asyncio.new_event_loop()
-        threading.Thread(target=self.loop.run_forever, daemon=True).start()
+        self._thr = threading.Thread(target=self.loop.run_forever, daemon=True)
+        self._thr.start()
         self.client = None
         self.buf = b""
         self.name = None
@@ -104,6 +105,13 @@ class BleLink:
             except Exception:
                 pass
         self.client = None
+        # stop + close the private event loop, else each failed scan leaks a
+        # kqueue + socketpair -> EMFILE after a few hours with no stick around
+        if not self.loop.is_closed():
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            self._thr.join(5)
+            if not self.loop.is_running():
+                self.loop.close()
 
 
 CONF_DIR = os.path.expanduser("~/.config/claude-buddy")
@@ -363,6 +371,7 @@ class Bridge:
         link = BleLink(self._on_device_line)
         try:
             if not link.connect(self.ble_prefix):
+                link.close()
                 return False
             probe, want = (({"cmd": "owner", "name": self.owner}, "owner") if self.owner
                            else ({"cmd": "sfx", "name": "none"}, "sfx"))

@@ -43,7 +43,7 @@ small{color:var(--dim)}#msg{position:fixed;left:50%;bottom:16px;transform:transl
 <option value="0">Không tắt</option><option value="15">15 s</option><option value="30">30 s</option><option value="60">1 phút</option><option value="300">5 phút</option></select></div>
 <div class="row"><label>Tắt cả khi cắm USB</label><button id="offu" onclick="set({offUsb:!S.dev.offUsb})"></button></div>
 <div class="row"><label>Ngủ sâu khi mất kết nối (pin)</label><select id="slp" onchange="set({sleepMin:+this.value})">
-<option value="0">Không</option><option value="1">1 phút</option><option value="5">5 phút</option><option value="10">10 phút</option><option value="30">30 phút</option><option value="60">1 giờ</option></select></div>
+<option value="0">Không</option><option value="1">1 phút</option><option value="2">2 phút</option><option value="5">5 phút</option><option value="10">10 phút</option><option value="30">30 phút</option></select></div>
 <div class="row"><small id="devInfo"></small></div>
 <div class="row"><button onclick="if(confirm('Khởi động lại stick?'))post('/api/reboot',{})">Khởi động lại</button></div>
 </section>

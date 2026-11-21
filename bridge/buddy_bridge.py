@@ -608,12 +608,7 @@ class Bridge:
                 self.rate_by_sess[sid] = (rl, now)
                 for k in [k for k, (_, t) in self.rate_by_sess.items() if now - t > 600]:
                     del self.rate_by_sess[k]
-                # Several sessions may belong to different accounts, each with
-                # its own limits. Show the session that was active most recently
-                # (hook activity), not whichever statusline refreshed last.
-                best = max(self.rate_by_sess,
-                           key=lambda k: (self.last_active.get(k, 0), self.rate_by_sess[k][1]))
-                rl = self.rate_by_sess[best][0]
+                rl = pick_rate(self.rate_by_sess, self.last_active)
                 changed = rl != self.rate
                 self.rate = rl
             if changed:
@@ -673,6 +668,38 @@ class Bridge:
 
 
 VN_DOW = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"]
+
+
+def _account_key(rl):
+    """Weekly reset time identifies the account (two accounts reset at different times)."""
+    for key in ("seven_day", "five_hour"):
+        w = rl.get(key)
+        if isinstance(w, dict) and w.get("resets_at") is not None:
+            return (key, w["resets_at"])
+    return None
+
+
+def pick_rate(rate_by_sess, last_active):
+    """Choose the rate_limits to show from {session_id: (rate_limits, seen_ts)}.
+
+    Several sessions may belong to different accounts, each with its own limits:
+    follow the account of the session with the most recent hook activity.
+    Sessions of the SAME account send snapshots of different age, so merge them:
+    per window take the newest resets_at, then the highest used_percentage
+    (usage only grows within a window). Otherwise the stick flips between
+    sessions (seen 2026-11-21: 1% vs 3%)."""
+    best = max(rate_by_sess, key=lambda k: (last_active.get(k, 0), rate_by_sess[k][1]))
+    acct = _account_key(rate_by_sess[best][0])
+    group = [rl for rl, _ in rate_by_sess.values() if acct is not None and _account_key(rl) == acct]
+    if not group:
+        return rate_by_sess[best][0]
+    out = dict(rate_by_sess[best][0])
+    for key in ("five_hour", "seven_day"):
+        ws = [rl[key] for rl in group if isinstance(rl.get(key), dict)
+              and rl[key].get("used_percentage") is not None]
+        if ws:
+            out[key] = max(ws, key=lambda w: (w.get("resets_at") or 0, float(w["used_percentage"])))
+    return out
 
 
 def limits_for(rl, now):

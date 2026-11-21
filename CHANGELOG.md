@@ -1,5 +1,11 @@
 # Changelog (fork wangngo/claude-desktop-buddy)
 
+## 2026-11-21 — 5h limit no longer flips between sessions
+- Bug: with 2 sessions on the same account, the stick's 5h % flipped (seen 1% vs 3%). `on_statusline` showed the most recently active session's own statusline snapshot, and snapshots differ in age.
+- Fix: `pick_rate()` in `bridge/buddy_bridge.py`. It groups sessions by account (key = `seven_day.resets_at`) and follows the account of the most recently active session, as before. Per window it takes the newest `resets_at`, then the highest `used_percentage`.
+- Tests: `bridge/test_buddy_bridge.py` (run `bridge/.venv/bin/python -m unittest discover -s bridge -v`).
+- BLE link itself was healthy (`stick ready over BLE (Claude-A981)` 11:57).
+
 ## 2026-11-18 (5) — power monitor, WiFi heat fix, on-stick web UI, Daikin IR
 - `src/power_mon.h`: 5 s samples (VBAT, voltage-%, PM1 charge flag, ESP32 die temp), `{"evt":"pwr"}` every 30 s → bridge `~/.config/claude-buddy/power.csv`; 2 h RAM history; reset reason; `power_log`, `pm1` (read-only PMIC diag) commands. M5PM1 has NO current sense (datasheet v1.9) — `GetBatCurrent()` is meaningless on S3; DEVICE page now uses power_mon.
 - Battery icon on dashboard (landscape top-left, portrait top-right).

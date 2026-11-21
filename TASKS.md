@@ -17,9 +17,12 @@
 - [ ] USB drop/reset on power-state change while on USB (charge re-enable, boost off) — investigate (rawRst via `pm1`).
 - [ ] Remove/keep diag cmds (`spk`, `chg`, `bri`, `ir_capture`, wifi_scan `passive`/`txp`) before merging.
 - [ ] Menus/settings/info screens still small portrait type.
+- [ ] Firmware keeps stale lim when bridge sends no `lim` (both windows expired) — `src/data.h:125`.
+- [ ] Firmware `_LineBuf<1024>` (`src/data.h`): heartbeat ~693 B now, Vietnamese entries could exceed 1 KB → line dropped.
 - [ ] WiFi (LAN transport + OTA + device HTTP API for AC) — agreed order IR→BT→WiFi, IR deferred.
 
 ## Done
+- [x] 5h limit flipping between same-account sessions — `pick_rate` merge (2026-11-21).
 - [x] Power monitor + battery icon + power.csv (2026-11-18).
 - [x] WiFi heat fix (no core auto-reconnect, backoff, radio off, give-up) + TX cap 15 dBm (2026-11-18).
 - [x] Web UI + Daikin IR send + IR capture tooling built & flashed (2026-11-18, web untested live).

@@ -187,9 +187,10 @@ struct Settings {
   uint8_t vol;       // speaker volume 0..255
   uint16_t offSec;   // screen auto-off after N s idle, 0 = never
   bool offUsb;       // also auto-off while on USB power
+  uint8_t sleepMin;  // deep sleep after N min disconnected on battery, 0 = never
 };
 
-static Settings _settings = { true, true, false, true, true, 0, 4, 150, 30, false };
+static Settings _settings = { true, true, false, true, true, 0, 4, 150, 30, false, 10 };
 
 inline void settingsLoad() {
   _prefs.begin("buddy", true);
@@ -205,6 +206,7 @@ inline void settingsLoad() {
   _settings.vol      = _prefs.getUChar("s_vol", 150);
   _settings.offSec   = _prefs.getUShort("s_off", 30);
   _settings.offUsb   = _prefs.getBool("s_offu", false);
+  _settings.sleepMin = _prefs.getUChar("s_slp", 10);
   _prefs.end();
 }
 
@@ -220,6 +222,7 @@ inline void settingsSave() {
   _prefs.putUChar("s_vol", _settings.vol);
   _prefs.putUShort("s_off", _settings.offSec);
   _prefs.putBool("s_offu", _settings.offUsb);
+  _prefs.putUChar("s_slp", _settings.sleepMin);
   _prefs.end();
 }
 

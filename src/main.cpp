@@ -972,6 +972,15 @@ void setup() {
   cfg.serial_baudrate = 115200;   // M5Unified skips Serial.begin when 0 (old M5StickCPlus lib always did it)
   M5.begin(cfg);
   M5.Lcd.setRotation(0);
+  // Woken from deep sleep by BtnA: swallow that press so it doesn't also
+  // cycle the display mode / open the menu on release.
+  {
+    esp_sleep_wakeup_cause_t wc = esp_sleep_get_wakeup_cause();
+    if (wc == ESP_SLEEP_WAKEUP_EXT0 || wc == ESP_SLEEP_WAKEUP_EXT1) {
+      M5.update();
+      if (M5.BtnA.isPressed()) swallowBtnA = true;
+    }
+  }
 
   HBeep.begin();
   audioInit();
@@ -1314,6 +1323,24 @@ void loop() {
       && millis() - lastInteractMs > offMs) {
     HAxp.SetLDO2(false);
     screenOff = true;
+  }
+
+  // Deep sleep on battery after sleepMin minutes with no Claude link and no
+  // button press. BtnA wakes (full reboot). Never while a prompt is pending,
+  // the setup AP is up, or the web UI is in use.
+  static uint32_t disconnSinceMs = 0;
+  bool linked = dataConnected() || bleConnected();
+  if (linked) disconnSinceMs = 0;
+  else if (!disconnSinceMs) disconnSinceMs = millis() | 1;
+  uint32_t slpMs = (uint32_t)settings().sleepMin * 60000UL;
+  if (slpMs && !linked && !_onUsb && !inPrompt && !wifiApActive() && !webRecent()
+      && millis() - disconnSinceMs > slpMs && millis() - lastInteractMs > slpMs) {
+    statsSave();
+    settingsSave();
+    beep(600, 80);
+    delay(120);
+    WiFi.mode(WIFI_OFF);
+    HAxp.DeepSleepOnBtnA();
   }
 
   delay(screenOff ? (webRecent() ? 10 : 100) : 16);

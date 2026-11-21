@@ -1,6 +1,8 @@
 # TASKS
 
 ## Open
+- [ ] Flash + test deep sleep (`sleepMin`, src/main.cpp auto-off block): set 1 min, unplug USB, stop bridge → sleeps ~1.5 min; BtnA wakes, menu not opened, reset reason `deepsleep`; must NOT sleep on USB / BLE linked / prompt / AP. Then measure battery drop overnight.
+- [ ] Fix pre-existing `m5stickc-plus` build break: `src/power_mon.h:93` uses `M5.Power.M5pm1` (S3-only) → guard by board/target.
 - [ ] Verify battery % / charging / usb readout on StickS3 (M5PM1 may not report VBUS/current → info page DEVICE).
 - [ ] `pio run -e m5sticks3 -t uploadfs` for the GIF character (bufo) — LittleFS is empty after erase (`mount failed -84` is expected until then).
 - [ ] Optional: enable PSRAM (qio_opi, BOARD_HAS_PSRAM) per vendor PlatformIO config.

@@ -3,6 +3,8 @@
 // written against onto M5Unified, so the same source builds for
 // M5StickC Plus (AXP192) and M5StickS3 (ESP32-S3 + M5PM1 PMIC).
 #include <M5Unified.h>
+#include <esp_sleep.h>
+#include <driver/rtc_io.h>
 
 // ---- Display types (TFT_eSPI names -> LovyanGFX/M5GFX) ----
 using TFT_eSPI    = lgfx::LovyanGFX;
@@ -39,6 +41,24 @@ struct HalPower {
   // LDO2 fed the LCD backlight on StickC Plus: on/off == wake/sleep panel.
   void SetLDO2(bool on) { if (on) M5.Display.wakeup(); else M5.Display.sleep(); }
   void PowerOff() { M5.Power.powerOff(); }
+  // Deep sleep, wake on BtnA (active-low). Chip reboots into setup().
+  // We arm the wakeup ourselves and pass touch_wakeup=false so M5Unified
+  // doesn't apply its own pin config (it enables a pull-down on the wake pin).
+  void DeepSleepOnBtnA() {
+    if (M5.getBoard() == m5::board_t::board_M5StickCPlus) {
+#if SOC_PM_SUPPORT_EXT0_WAKEUP
+      esp_sleep_enable_ext0_wakeup(GPIO_NUM_37, 0);   // BtnA, external pull-up
+#endif
+    } else {                                           // StickS3: BtnA = GPIO11
+#if SOC_PM_SUPPORT_EXT1_WAKEUP
+      const gpio_num_t pin = GPIO_NUM_11;
+      esp_sleep_enable_ext1_wakeup(1ULL << pin, ESP_EXT1_WAKEUP_ANY_LOW);
+      rtc_gpio_pullup_en(pin);
+      rtc_gpio_pulldown_dis(pin);
+#endif
+    }
+    M5.Power.deepSleep(M5.Power.sleep_no_timer, false);
+  }
   float GetBatVoltage()  { return M5.Power.getBatteryVoltage() / 1000.0f; }
   float GetBatCurrent()  { return (float)M5.Power.getBatteryCurrent(); }
   float GetVBusVoltage() {

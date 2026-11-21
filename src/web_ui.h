@@ -91,7 +91,7 @@ static void _apiState() {
   JsonObject dev = d["dev"].to<JsonObject>();
   Settings& s = settings();
   dev["bright"] = brightLevel; dev["vol"] = s.vol; dev["sound"] = s.sound;
-  dev["offSec"] = s.offSec; dev["offUsb"] = s.offUsb;
+  dev["offSec"] = s.offSec; dev["offUsb"] = s.offUsb; dev["sleepMin"] = s.sleepMin;
   dev["up"] = millis() / 1000;
   dev["heapInt"] = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
   dev["psram"] = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
@@ -119,6 +119,7 @@ static void _apiSet() {
   if (!b["sound"].isNull())  s.sound = b["sound"].as<bool>();
   if (!b["offSec"].isNull()) s.offSec = constrain(b["offSec"].as<int>(), 0, 3600);
   if (!b["offUsb"].isNull()) s.offUsb = b["offUsb"].as<bool>();
+  if (!b["sleepMin"].isNull()) s.sleepMin = constrain(b["sleepMin"].as<int>(), 0, 240);
   settingsSave();
   JsonDocument d; d["ok"] = true; _webJson(200, d);
 }

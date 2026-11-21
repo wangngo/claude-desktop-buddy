@@ -42,6 +42,8 @@ small{color:var(--dim)}#msg{position:fixed;left:50%;bottom:16px;transform:transl
 <div class="row"><label>Tắt màn sau</label><select id="off" onchange="set({offSec:+this.value})">
 <option value="0">Không tắt</option><option value="15">15 s</option><option value="30">30 s</option><option value="60">1 phút</option><option value="300">5 phút</option></select></div>
 <div class="row"><label>Tắt cả khi cắm USB</label><button id="offu" onclick="set({offUsb:!S.dev.offUsb})"></button></div>
+<div class="row"><label>Ngủ sâu khi mất kết nối (pin)</label><select id="slp" onchange="set({sleepMin:+this.value})">
+<option value="0">Không</option><option value="1">1 phút</option><option value="5">5 phút</option><option value="10">10 phút</option><option value="30">30 phút</option><option value="60">1 giờ</option></select></div>
 <div class="row"><small id="devInfo"></small></div>
 <div class="row"><button onclick="if(confirm('Khởi động lại stick?'))post('/api/reboot',{})">Khởi động lại</button></div>
 </section>
@@ -80,7 +82,7 @@ async function load(){const r=await fetch('/api/state');if(!r.ok)return;S=await 
  $('acInfo').textContent=a.sentAgo>=0?('Lần gửi cuối '+a.sentAgo+' s trước'+(a.lastOk?'':' (LỖI)')):'';
  const d=S.dev;$('bri').value=d.bright;$('briV').textContent=(20+d.bright*20)+'%';$('vol').value=d.vol;
  $('snd').textContent=d.sound?'Bật':'Tắt';$('snd').className=d.sound?'on':'off';$('off').value=d.offSec;
- $('offu').textContent=d.offUsb?'Có':'Không';
+ $('offu').textContent=d.offUsb?'Có':'Không';$('slp').value=d.sleepMin;
  $('devInfo').textContent='Uptime '+Math.floor(d.up/3600)+'h'+String(Math.floor(d.up/60)%60).padStart(2,'0')+' · RAM nội '+Math.round(d.heapInt/1024)+' KB · PSRAM '+Math.round(d.psram/1024)+' KB';
  const w=S.wifi;$('host').textContent=w.host;$('wst').textContent=w.state+(w.ip?' · '+w.ip:'')+(w.rssi?' · '+w.rssi+' dBm':'');
  if(document.activeElement!==$('ssid')&&!$('ssid').value)$('ssid').value=w.ssid||'';

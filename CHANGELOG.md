@@ -1,5 +1,12 @@
 # Changelog (fork wangngo/claude-desktop-buddy)
 
+## 2026-11-21 (2) — deep sleep when disconnected on battery
+- Before: the stick only turned the screen off (`offSec`). It never powered down, and it ignored link state.
+- New: on battery, no Claude link (`!dataConnected() && !bleConnected()`) and no button press for `sleepMin` minutes → `statsSave/settingsSave`, WiFi off, `HAxp.DeepSleepOnBtnA()`. The stick does not sleep while a prompt is pending, the setup AP is up, or the web UI is in use.
+- Wake: BtnA (StickS3 GPIO11 via EXT1 ANY_LOW, internal pull-up; StickC Plus GPIO37 via EXT0). The chip reboots. The wake press is swallowed in `setup()`.
+- Setting `sleepMin` (NVS `s_slp`, default 10, 0 = off). Set it in the web UI row "Ngủ sâu khi mất kết nối (pin)".
+- `pio run -e m5sticks3` builds. NOT flashed or tested on the device yet (stick was not on USB). `m5stickc-plus` build was already broken before this change (`power_mon.h:93` uses `M5pm1`).
+
 ## 2026-11-21 — 5h limit no longer flips between sessions
 - Bug: with 2 sessions on the same account, the stick's 5h % flipped (seen 1% vs 3%). `on_statusline` showed the most recently active session's own statusline snapshot, and snapshots differ in age.
 - Fix: `pick_rate()` in `bridge/buddy_bridge.py`. It groups sessions by account (key = `seven_day.resets_at`) and follows the account of the most recently active session, as before. Per window it takes the newest `resets_at`, then the highest `used_percentage`.

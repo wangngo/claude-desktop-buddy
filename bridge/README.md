@@ -93,6 +93,10 @@ Then remove the hook entries whose url is `http://127.0.0.1:47830/` from
 
 ## Gotchas
 
+- When the stick is attached to Kiri (`kiri usb attach`, USB/IP into the Kiri VM; see ~/kiri-lab), macOS
+  loses `/dev/cu.usbmodem*`. The bridge LaunchAgent keeps running but has no device, so the stick shows
+  nothing over USB. Give it back with `/Applications/Kiri.app/Contents/MacOS/kiri usb detach 0x00100000`.
+  The BLE link is not affected.
 - Opening `/dev/cu.usbmodem*` on macOS resets the StickS3. Never open it from
   a per-event script; only the daemon holds it. Stop the LaunchAgent before
   `pio run -t upload`/`uploadfs` (the port is busy), then start it again with

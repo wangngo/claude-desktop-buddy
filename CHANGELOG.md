@@ -1,5 +1,13 @@
 # Changelog (fork wangngo/claude-desktop-buddy)
 
+## 2026-11-22 — full flash backup + Kiri USB test (no firmware change)
+- Full 8MB flash backup of the firmware that was on the stick: `read-flash 0 0x800000`, read twice, both SHA-256
+  `a6e7233eeffcd043e28252dfb4515c44045ffef2c80573629f947c900656d54b`. Copies: `~/kiri-lab/backups/m5stick-7ce8b1e4a980-20261122-080448.bin`
+  (local, gitignored) and Mega `/Backups/kiri-lab/M5StickS3/…bin.gz`. Restore: `esptool write-flash 0 <bin>`.
+- Test in ~/kiri-lab: MicroPython flashed to check the board, I2C on G47/G48 = 0x18 ES8311, 0x68 BMI270, 0x6e M5PM1.
+  Then the backup was written back, and a read-back gave the same SHA-256. The buddy firmware is unchanged.
+- While attached to Kiri, macOS has no `/dev/cu.usbmodem*`, so the USB bridge cannot reach the stick (see bridge/README Gotchas).
+
 ## 2026-11-21 (2) — deep sleep when disconnected on battery
 - Before: the stick only turned the screen off (`offSec`). It never powered down, and it ignored link state.
 - New: on battery, no Claude link (`!dataConnected() && !bleConnected()`) and no button press for `sleepMin` minutes → `statsSave/settingsSave`, WiFi off, `HAxp.DeepSleepOnBtnA()`. The stick does not sleep while a prompt is pending, the setup AP is up, or the web UI is in use.
